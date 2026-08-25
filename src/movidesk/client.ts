@@ -7,6 +7,7 @@
  */
 
 import { RateLimiter, backoffWithJitter, sleep } from "../store/rateLimiter.js";
+import { emitEvent, newEventId } from "../observability/eventBus.js";
 
 const BASE_URL = process.env.MOVIDESK_BASE_URL ?? "https://api.movidesk.com/public/v1";
 const TOKEN = process.env.MOVIDESK_TOKEN;
@@ -60,7 +61,52 @@ interface RequestOptions {
   retryOnServerError?: boolean;
 }
 
+/**
+ * Envolve `requestInner` para publicar eventos de observabilidade (dashboard) sem tocar
+ * a lógica de retry/backoff. A URL/query publicada NUNCA inclui o token — só método,
+ * caminho e a query string OData (que já não contém segredos).
+ */
 async function request<T>(opts: RequestOptions): Promise<T> {
+  const id = newEventId();
+  const qsForDisplay = opts.query ? buildQueryString(opts.query) : "";
+  const start = Date.now();
+  emitEvent({
+    kind: "api_call_start",
+    id,
+    timestamp: new Date().toISOString(),
+    method: opts.method,
+    path: opts.path,
+    query: qsForDisplay || undefined,
+  });
+  try {
+    const result = await requestInner<T>(opts);
+    emitEvent({
+      kind: "api_call_end",
+      id,
+      timestamp: new Date().toISOString(),
+      method: opts.method,
+      path: opts.path,
+      status: "ok",
+      durationMs: Date.now() - start,
+    });
+    return result;
+  } catch (err) {
+    emitEvent({
+      kind: "api_call_end",
+      id,
+      timestamp: new Date().toISOString(),
+      method: opts.method,
+      path: opts.path,
+      status: "error",
+      httpStatus: err instanceof MovideskApiError ? err.status : undefined,
+      durationMs: Date.now() - start,
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
+}
+
+async function requestInner<T>(opts: RequestOptions): Promise<T> {
   if (!TOKEN) {
     throw new Error(
       "MOVIDESK_TOKEN não configurado. Configure a variável de ambiente antes de usar o cliente Movidesk.",

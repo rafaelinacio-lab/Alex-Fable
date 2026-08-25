@@ -14,8 +14,10 @@ src/movidesk/                              # cliente HTTP + recursos (tickets, p
 src/local/                                 # diretórios locais: contatos (email->cod_ref), orgs, AD
 src/store/                                 # auditoria, idempotência, rate limiter
 src/agent/tools.ts                         # contrato de ferramentas (schemas zod + dispatch)
-src/agent/orchestrator.ts                  # loop de tool-use com a API da Anthropic
-src/agent/cli.ts                           # REPL de terminal para testar localmente
+src/agent/orchestrator.ts                  # loop de function-calling com a API da OpenAI
+src/agent/cli.ts                           # REPL de terminal para testar localmente (sobe o dashboard junto)
+src/observability/eventBus.ts              # barramento de eventos (chamadas de ferramenta e de API), sanitizado
+src/server/dashboard.ts + public/dashboard.html  # painel web ao vivo (WebSocket)
 test/core.test.ts                          # smoke tests (escape, idempotência, rate limit, config)
 ```
 
@@ -23,11 +25,17 @@ test/core.test.ts                          # smoke tests (escape, idempotência,
 
 ```bash
 npm install
-cp .env.example .env   # preencha ANTHROPIC_API_KEY, MOVIDESK_TOKEN, MOVIDESK_BASE_URL
+cp .env.example .env   # preencha OPENAI_API_KEY, MOVIDESK_TOKEN, MOVIDESK_BASE_URL
 npm run lint            # typecheck
 npm test                # smoke tests (não fazem chamadas reais ao Movidesk)
-npm run dev              # abre o REPL do agente no terminal
+npm run dev              # abre o REPL do agente no terminal E sobe o painel web
 ```
+
+Ao rodar `npm run dev`, o terminal imprime a URL do painel (padrão
+`http://localhost:4590`) — abra no navegador para acompanhar em tempo real cada
+ferramenta que o agente chama e cada requisição feita à API do Movidesk (método,
+caminho, status, duração), com input/output redigidos e truncados. Nenhum token ou
+segredo trafega para essa página — ver `src/observability/eventBus.ts`.
 
 Para testar sem depender de AD/Movidesk reais, copie os arquivos `*.example.json` em
 `data/local/` para os nomes usados pelo `.env` (`movidesk_contatos.json`,

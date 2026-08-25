@@ -7,8 +7,9 @@
  *  - registra auditoria antes/depois quando é uma mutação;
  *  - usa idempotência para criações de ticket.
  *
- * Para adaptar a um orquestrador diferente (não-Anthropic), reaproveite `TOOL_DEFINITIONS`
- * e `dispatchTool` — só a camada de loop de conversa (orchestrator.ts) muda.
+ * Para adaptar a um orquestrador diferente (outro provedor de LLM), reaproveite
+ * `TOOL_DESCRIPTIONS` e `dispatchTool` — só a camada de loop de conversa
+ * (orchestrator.ts) muda.
  */
 
 import { z } from "zod";
@@ -21,6 +22,7 @@ import { getService, searchServices } from "../movidesk/services.js";
 import { odataEscape, MovideskApiError } from "../movidesk/client.js";
 import { recordAuditEvent, hashPayload, newCorrelationId } from "../store/audit.js";
 import { idempotencyGet, idempotencyPut, idempotencyReserve } from "../store/idempotency.js";
+import { emitEvent, newEventId, sanitizeForDashboard } from "../observability/eventBus.js";
 
 export interface AgentContext {
   conversationId: string;
@@ -131,7 +133,48 @@ async function audit(
   });
 }
 
+/**
+ * Envolve `dispatchToolInner` para publicar eventos de observabilidade (dashboard):
+ * início e fim de cada chamada de ferramenta, com input/output redigidos e truncados
+ * por `sanitizeForDashboard` — nunca o payload cru (que pode ter PII completa).
+ */
 export async function dispatchTool(name: ToolName, rawInput: unknown, ctx: AgentContext): Promise<unknown> {
+  const id = newEventId();
+  const start = Date.now();
+  emitEvent({
+    kind: "tool_call_start",
+    id,
+    timestamp: new Date().toISOString(),
+    tool: name,
+    input: sanitizeForDashboard(rawInput),
+  });
+  try {
+    const result = await dispatchToolInner(name, rawInput, ctx);
+    emitEvent({
+      kind: "tool_call_end",
+      id,
+      timestamp: new Date().toISOString(),
+      tool: name,
+      status: "ok",
+      durationMs: Date.now() - start,
+      output: sanitizeForDashboard(result),
+    });
+    return result;
+  } catch (err) {
+    emitEvent({
+      kind: "tool_call_end",
+      id,
+      timestamp: new Date().toISOString(),
+      tool: name,
+      status: "error",
+      durationMs: Date.now() - start,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
+}
+
+async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentContext): Promise<unknown> {
   const schema = schemas[name];
   if (!schema) throw new Error(`Ferramenta desconhecida: ${name}`);
   const input = schema.parse(rawInput) as any;

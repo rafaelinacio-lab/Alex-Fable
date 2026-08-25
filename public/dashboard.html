@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agente Movidesk — Painel ao vivo</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #0b0f14;
+    --panel: #121822;
+    --panel-border: #23303f;
+    --text: #e6edf3;
+    --muted: #8b98a5;
+    --accent: #4f9dff;
+    --ok: #3fb950;
+    --err: #f85149;
+    --pending: #d29922;
+    --tool: #a371f7;
+    --api: #56d4dd;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--panel-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  #status {
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--panel-border);
+  }
+  #status.connected { color: var(--ok); border-color: var(--ok); }
+  #status.disconnected { color: var(--err); border-color: var(--err); }
+  .stats {
+    display: flex;
+    gap: 16px;
+    padding: 12px 24px;
+    border-bottom: 1px solid var(--panel-border);
+    flex-wrap: wrap;
+  }
+  .stat {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 10px 16px;
+    min-width: 120px;
+  }
+  .stat .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .stat .value { font-size: 22px; font-weight: 600; margin-top: 2px; }
+  main { padding: 16px 24px; max-width: 1100px; margin: 0 auto; }
+  .toolbar { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .toolbar button {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .toolbar button.active { border-color: var(--accent); color: var(--accent); }
+  #feed { display: flex; flex-direction: column; gap: 8px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-left: 3px solid var(--muted);
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 13px;
+  }
+  .card.tool { border-left-color: var(--tool); }
+  .card.api { border-left-color: var(--api); }
+  .card.ok { border-left-color: var(--ok); }
+  .card.error { border-left-color: var(--err); }
+  .card .row1 { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .card .kind {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.06);
+  }
+  .card .name { font-weight: 600; margin-left: 8px; }
+  .card .time { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .card .duration { color: var(--muted); font-size: 11px; }
+  .card pre {
+    margin: 6px 0 0;
+    background: rgba(0,0,0,0.25);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 12px;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #c9d1d9;
+  }
+  .badge-ok { color: var(--ok); }
+  .badge-error { color: var(--err); }
+  .badge-pending { color: var(--pending); }
+  .empty { color: var(--muted); text-align: center; padding: 40px 0; font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Agente Movidesk — Painel ao vivo</h1>
+    <div class="sub">O que o agente está fazendo e o que está consultando na API, em tempo real.</div>
+  </div>
+  <div id="status" class="disconnected">conectando…</div>
+</header>
+
+<div class="stats">
+  <div class="stat"><div class="label">Chamadas de ferramenta</div><div class="value" id="statTools">0</div></div>
+  <div class="stat"><div class="label">Chamadas à API</div><div class="value" id="statApi">0</div></div>
+  <div class="stat"><div class="label">Erros</div><div class="value" id="statErrors">0</div></div>
+  <div class="stat"><div class="label">Em andamento</div><div class="value" id="statPending">0</div></div>
+</div>
+
+<main>
+  <div class="toolbar">
+    <button data-filter="all" class="active">Tudo</button>
+    <button data-filter="tool">Ferramentas do agente</button>
+    <button data-filter="api">Chamadas à API Movidesk</button>
+    <button data-filter="error">Só erros</button>
+  </div>
+  <div id="feed"></div>
+</main>
+
+<script>
+(function () {
+  const feedEl = document.getElementById("feed");
+  const statusEl = document.getElementById("status");
+  const statTools = document.getElementById("statTools");
+  const statApi = document.getElementById("statApi");
+  const statErrors = document.getElementById("statErrors");
+  const statPending = document.getElementById("statPending");
+
+  let filter = "all";
+  let counts = { tools: 0, api: 0, errors: 0 };
+  // id -> { el, kind, startedAt }
+  const pending = new Map();
+  let items = []; // { id, kind, group, status, el }
+
+  function updateStats() {
+    statTools.textContent = counts.tools;
+    statApi.textContent = counts.api;
+    statErrors.textContent = counts.errors;
+    statPending.textContent = pending.size;
+  }
+
+  function fmtTime(iso) {
+    const d = new Date(iso);
+    return d.toLocaleTimeString("pt-BR", { hour12: false });
+  }
+
+  function renderJson(value) {
+    if (value === undefined) return "";
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
+  }
+
+  function applyFilter() {
+    for (const item of items) {
+      const show =
+        filter === "all" ||
+        (filter === "tool" && item.group === "tool") ||
+        (filter === "api" && item.group === "api") ||
+        (filter === "error" && item.status === "error");
+      item.el.style.display = show ? "" : "none";
+    }
+  }
+
+  document.querySelectorAll(".toolbar button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".toolbar button").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      filter = btn.dataset.filter;
+      applyFilter();
+    });
+  });
+
+  function makeCard(group, statusClass) {
+    const el = document.createElement("div");
+    el.className = "card " + group + (statusClass ? " " + statusClass : "");
+    feedEl.prepend(el);
+    return el;
+  }
+
+  function handleToolStart(ev) {
+    counts.tools++;
+    const el = makeCard("tool", "");
+    el.innerHTML =
+      '<div class="row1"><div><span class="kind">ferramenta</span><span class="name">' +
+      escapeHtml(ev.tool) +
+      '</span></div><div class="time">' +
+      fmtTime(ev.timestamp) +
+      ' · <span class="badge-pending">em andamento…</span></div></div>' +
+      "<pre>" + escapeHtml(renderJson(ev.input)) + "</pre>";
+    pending.set(ev.id, el);
+    items.push({ id: ev.id, group: "tool", status: "pending", el });
+    updateStats();
+    applyFilter();
+  }
+
+  function handleToolEnd(ev) {
+    const el = pending.get(ev.id);
+    pending.delete(ev.id);
+    if (ev.status === "error") counts.errors++;
+    const target = el || makeCard("tool", ev.status);
+    target.className = "card tool " + ev.status;
+    const badge =
+      ev.status === "ok"
+        ? '<span class="badge-ok">ok</span>'
+        : '<span class="badge-error">erro</span>';
+    target.innerHTML =
+      '<div class="row1"><div><span class="kind">ferramenta</span><span class="name">' +
+      escapeHtml(ev.tool) +
+      '</span></div><div class="time">' +
+      fmtTime(ev.timestamp) +
+      " · " + badge + ' · <span class="duration">' + ev.durationMs + "ms</span></div></div>" +
+      (ev.status === "error"
+        ? "<pre>" + escapeHtml(ev.error || "") + "</pre>"
+        : "<pre>" + escapeHtml(renderJson(ev.output)) + "</pre>");
+    const item = items.find((i) => i.id === ev.id);
+    if (item) item.status = ev.status;
+    updateStats();
+    applyFilter();
+  }
+
+  function handleApiStart(ev) {
+    counts.api++;
+    const el = makeCard("api", "");
+    el.innerHTML =
+      '<div class="row1"><div><span class="kind">api movidesk</span><span class="name">' +
+      escapeHtml(ev.method) + " " + escapeHtml(ev.path) +
+      '</span></div><div class="time">' +
+      fmtTime(ev.timestamp) +
+      ' · <span class="badge-pending">em andamento…</span></div></div>' +
+      (ev.query ? "<pre>" + escapeHtml(ev.query) + "</pre>" : "");
+    pending.set(ev.id, el);
+    items.push({ id: ev.id, group: "api", status: "pending", el });
+    updateStats();
+    applyFilter();
+  }
+
+  function handleApiEnd(ev) {
+    const el = pending.get(ev.id);
+    pending.delete(ev.id);
+    if (ev.status === "error") counts.errors++;
+    const target = el || makeCard("api", ev.status);
+    target.className = "card api " + ev.status;
+    const badge =
+      ev.status === "ok"
+        ? '<span class="badge-ok">ok' + (ev.httpStatus ? " " + ev.httpStatus : "") + "</span>"
+        : '<span class="badge-error">erro' + (ev.httpStatus ? " " + ev.httpStatus : "") + "</span>";
+    target.innerHTML =
+      '<div class="row1"><div><span class="kind">api movidesk</span><span class="name">' +
+      escapeHtml(ev.method) + " " + escapeHtml(ev.path) +
+      '</span></div><div class="time">' +
+      fmtTime(ev.timestamp) +
+      " · " + badge + ' · <span class="duration">' + ev.durationMs + "ms</span></div></div>" +
+      (ev.status === "error" ? "<pre>" + escapeHtml(ev.errorMessage || "") + "</pre>" : "");
+    const item = items.find((i) => i.id === ev.id);
+    if (item) item.status = ev.status;
+    updateStats();
+    applyFilter();
+  }
+
+  function handleEvent(ev) {
+    if (ev.kind === "tool_call_start") handleToolStart(ev);
+    else if (ev.kind === "tool_call_end") handleToolEnd(ev);
+    else if (ev.kind === "api_call_start") handleApiStart(ev);
+    else if (ev.kind === "api_call_end") handleApiEnd(ev);
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  function connect() {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(proto + "//" + location.host + "/ws");
+
+    ws.onopen = () => {
+      statusEl.textContent = "conectado";
+      statusEl.className = "connected";
+    };
+    ws.onclose = () => {
+      statusEl.textContent = "desconectado — tentando reconectar…";
+      statusEl.className = "disconnected";
+      setTimeout(connect, 2000);
+    };
+    ws.onerror = () => ws.close();
+    ws.onmessage = (msg) => {
+      const data = JSON.parse(msg.data);
+      if (data.type === "history") {
+        feedEl.innerHTML = "";
+        items = [];
+        pending.clear();
+        counts = { tools: 0, api: 0, errors: 0 };
+        for (const ev of data.events) handleEvent(ev);
+        if (data.events.length === 0) {
+          feedEl.innerHTML = '<div class="empty">Nenhuma atividade ainda. Assim que o agente começar a trabalhar, aparece aqui.</div>';
+        }
+      } else if (data.type === "event") {
+        const empty = feedEl.querySelector(".empty");
+        if (empty) empty.remove();
+        handleEvent(data.event);
+      }
+    };
+  }
+
+  connect();
+})();
+</script>
+</body>
+</html>

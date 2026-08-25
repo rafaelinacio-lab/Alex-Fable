@@ -7,8 +7,12 @@ import readline from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { MovideskAgentSession } from "./orchestrator.js";
 import type { AgentContext } from "./tools.js";
+import { startDashboardServer } from "../server/dashboard.js";
 
 async function main() {
+  const dashboard = startDashboardServer();
+  console.log(`Painel ao vivo: ${dashboard.url} (abra no navegador para acompanhar o agente)\n`);
+
   const authenticatedUser: AgentContext["authenticatedUser"] = {
     id_local: process.env.DEV_USER_ID ?? "dev-local",
     username: process.env.DEV_USER_USERNAME ?? "dev.local",

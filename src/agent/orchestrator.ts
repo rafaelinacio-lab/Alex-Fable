@@ -1,6 +1,6 @@
 /**
  * Orquestrador: carrega o prompt de sistema (fonte única em prompts/), expõe o contrato
- * de ferramentas ao Claude via tool-use, e executa o loop de conversa.
+ * de ferramentas ao modelo via function calling da OpenAI, e executa o loop de conversa.
  *
  * Este módulo NÃO decide política de negócio — isso vive inteiramente no prompt de
  * sistema. O código aqui só garante mecânica segura: schema de ferramentas, dispatch,
@@ -10,13 +10,14 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
+import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
 import { TOOL_DESCRIPTIONS, dispatchTool, type AgentContext, type ToolName } from "./tools.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SYSTEM_PROMPT_PATH = path.join(__dirname, "..", "..", "prompts", "movidesk-agent-system-prompt.md");
 
-const MODEL = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929";
+const MODEL = process.env.OPENAI_MODEL ?? "gpt-4.1";
 
 let cachedSystemPrompt: string | null = null;
 async function loadSystemPrompt(): Promise<string> {
@@ -26,23 +27,26 @@ async function loadSystemPrompt(): Promise<string> {
   return cachedSystemPrompt;
 }
 
-// Schemas JSON simplificados para o tool-use da Anthropic API (zod é usado na validação
-// real dentro de dispatchTool; aqui só descrevemos a forma para o modelo).
-const TOOL_INPUT_SCHEMAS: Record<ToolName, Anthropic.Tool.InputSchema> = {
-  get_authenticated_user: { type: "object", properties: {} },
+// Schemas JSON (formato "function calling" da OpenAI) para cada ferramenta. A validação
+// de verdade acontece dentro de dispatchTool (zod) — isto aqui só orienta o modelo.
+const TOOL_PARAMETERS: Record<ToolName, Record<string, unknown>> = {
+  get_authenticated_user: { type: "object", properties: {}, additionalProperties: false },
   find_movidesk_contact_by_email: {
     type: "object",
     properties: { email: { type: "string" } },
     required: ["email"],
+    additionalProperties: false,
   },
   search_ad_users: {
     type: "object",
     properties: { query: { type: "string" }, limit: { type: "integer" } },
     required: ["query"],
+    additionalProperties: false,
   },
   list_customer_organizations: {
     type: "object",
     properties: { query: { type: "string" }, limit: { type: "integer" } },
+    additionalProperties: false,
   },
   get_flow_config: {
     type: "object",
@@ -53,6 +57,7 @@ const TOOL_INPUT_SCHEMAS: Record<ToolName, Anthropic.Tool.InputSchema> = {
       },
     },
     required: ["flow_name"],
+    additionalProperties: false,
   },
   movidesk_get_ticket: {
     type: "object",
@@ -62,6 +67,7 @@ const TOOL_INPUT_SCHEMAS: Record<ToolName, Anthropic.Tool.InputSchema> = {
       expand: { type: "string" },
     },
     required: ["id"],
+    additionalProperties: false,
   },
   movidesk_search_tickets: {
     type: "object",
@@ -73,6 +79,7 @@ const TOOL_INPUT_SCHEMAS: Record<ToolName, Anthropic.Tool.InputSchema> = {
       skip: { type: "integer" },
     },
     required: ["filter", "select"],
+    additionalProperties: false,
   },
   movidesk_create_ticket: {
     type: "object",
@@ -82,6 +89,7 @@ const TOOL_INPUT_SCHEMAS: Record<ToolName, Anthropic.Tool.InputSchema> = {
       return_all_properties: { type: "boolean" },
     },
     required: ["idempotency_key", "payload"],
+    additionalProperties: false,
   },
   movidesk_patch_ticket: {
     type: "object",
@@ -91,8 +99,14 @@ const TOOL_INPUT_SCHEMAS: Record<ToolName, Anthropic.Tool.InputSchema> = {
       intent: { type: "string" },
     },
     required: ["id", "payload", "intent"],
+    additionalProperties: false,
   },
-  movidesk_get_person: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+  movidesk_get_person: {
+    type: "object",
+    properties: { id: { type: "string" } },
+    required: ["id"],
+    additionalProperties: false,
+  },
   movidesk_search_persons: {
     type: "object",
     properties: {
@@ -103,8 +117,14 @@ const TOOL_INPUT_SCHEMAS: Record<ToolName, Anthropic.Tool.InputSchema> = {
       skip: { type: "integer" },
     },
     required: ["filter", "select"],
+    additionalProperties: false,
   },
-  movidesk_get_service: { type: "object", properties: { id: { type: "integer" } }, required: ["id"] },
+  movidesk_get_service: {
+    type: "object",
+    properties: { id: { type: "integer" } },
+    required: ["id"],
+    additionalProperties: false,
+  },
   movidesk_search_services: {
     type: "object",
     properties: {
@@ -115,72 +135,94 @@ const TOOL_INPUT_SCHEMAS: Record<ToolName, Anthropic.Tool.InputSchema> = {
       skip: { type: "integer" },
     },
     required: ["filter", "select"],
+    additionalProperties: false,
   },
 };
 
-function buildTools(): Anthropic.Tool[] {
+function buildTools(): ChatCompletionTool[] {
   return (Object.keys(TOOL_DESCRIPTIONS) as ToolName[]).map((name) => ({
-    name,
-    description: TOOL_DESCRIPTIONS[name],
-    input_schema: TOOL_INPUT_SCHEMAS[name],
+    type: "function",
+    function: {
+      name,
+      description: TOOL_DESCRIPTIONS[name],
+      parameters: TOOL_PARAMETERS[name],
+    },
   }));
 }
 
 export class MovideskAgentSession {
-  private readonly client: Anthropic;
-  private readonly tools: Anthropic.Tool[];
-  private messages: Anthropic.MessageParam[] = [];
+  private readonly client: OpenAI;
+  private readonly tools: ChatCompletionTool[];
+  private messages: ChatCompletionMessageParam[] = [];
+  private systemLoaded = false;
 
   constructor(private readonly ctx: AgentContext) {
-    this.client = new Anthropic(); // lê ANTHROPIC_API_KEY do ambiente
+    this.client = new OpenAI(); // lê OPENAI_API_KEY do ambiente
     this.tools = buildTools();
   }
 
-  /** Envia uma mensagem do usuário e roda o loop de tool-use até obter uma resposta final em texto. */
-  async send(userText: string): Promise<string> {
-    this.messages.push({ role: "user", content: userText });
+  private async ensureSystemPrompt(): Promise<void> {
+    if (this.systemLoaded) return;
     const system = await loadSystemPrompt();
+    this.messages.unshift({ role: "system", content: system });
+    this.systemLoaded = true;
+  }
+
+  /** Envia uma mensagem do usuário e roda o loop de function-calling até obter uma resposta final em texto. */
+  async send(userText: string): Promise<string> {
+    await this.ensureSystemPrompt();
+    this.messages.push({ role: "user", content: userText });
 
     // Limite de segurança para não entrar em loop infinito de tool-calls.
     for (let round = 0; round < 20; round++) {
-      const response = await this.client.messages.create({
+      const response = await this.client.chat.completions.create({
         model: MODEL,
-        max_tokens: 2048,
-        system,
-        tools: this.tools,
         messages: this.messages,
+        tools: this.tools,
       });
 
-      this.messages.push({ role: "assistant", content: response.content });
-
-      if (response.stop_reason !== "tool_use") {
-        return response.content
-          .filter((block): block is Anthropic.TextBlock => block.type === "text")
-          .map((block) => block.text)
-          .join("\n");
+      const choice = response.choices[0];
+      if (!choice?.message) {
+        return "O modelo não retornou nenhuma resposta.";
       }
 
-      const toolResults: Anthropic.ToolResultBlockParam[] = [];
-      for (const block of response.content) {
-        if (block.type !== "tool_use") continue;
-        const toolName = block.name as ToolName;
+      this.messages.push(choice.message);
+
+      const toolCalls = choice.message.tool_calls;
+      if (!toolCalls || toolCalls.length === 0) {
+        return choice.message.content ?? "";
+      }
+
+      for (const call of toolCalls) {
+        if (call.type !== "function") continue;
+        const toolName = call.function.name as ToolName;
+        let parsedArgs: unknown;
         try {
-          const result = await dispatchTool(toolName, block.input, this.ctx);
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: block.id,
+          parsedArgs = call.function.arguments ? JSON.parse(call.function.arguments) : {};
+        } catch (err) {
+          this.messages.push({
+            role: "tool",
+            tool_call_id: call.id,
+            content: `Erro: argumentos inválidos (JSON malformado): ${String(err)}`,
+          });
+          continue;
+        }
+
+        try {
+          const result = await dispatchTool(toolName, parsedArgs, this.ctx);
+          this.messages.push({
+            role: "tool",
+            tool_call_id: call.id,
             content: JSON.stringify(result),
           });
         } catch (err) {
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: block.id,
-            is_error: true,
-            content: err instanceof Error ? err.message : String(err),
+          this.messages.push({
+            role: "tool",
+            tool_call_id: call.id,
+            content: `Erro: ${err instanceof Error ? err.message : String(err)}`,
           });
         }
       }
-      this.messages.push({ role: "user", content: toolResults });
     }
 
     return "Não consegui concluir dentro do limite de passos de ferramenta. Tente reformular a solicitação.";
