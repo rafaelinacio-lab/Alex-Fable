@@ -1,0 +1,25 @@
+{
+  "name": "movidesk-autonomous-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agente autônomo de atendimento Movidesk (VIASOFT) — ferramentas tipadas + orquestrador com Claude",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/agent/cli.ts",
+    "test": "node --import tsx --test test/**/*.test.ts",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
