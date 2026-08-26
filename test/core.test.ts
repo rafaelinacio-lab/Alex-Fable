@@ -7,6 +7,10 @@ import { buildIdempotencyKey, idempotencyReserve, idempotencyPut, idempotencyGet
 import { RateLimiter } from "../src/store/rateLimiter.js";
 import { getFlowConfig } from "../src/config/tenant.js";
 import { exportRowsToExcel } from "../src/local/export.js";
+import { loadEnv } from "../src/config/loadEnv.js";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 test("buildQueryString coloca id/protocol como parâmetro extra (não path) — regressão do bug de endpoint", () => {
   const qs = buildQueryString({ extra: { id: 123 } });
@@ -107,4 +111,27 @@ test("exportRowsToExcel grava um .xlsx real em disco e devolve o caminho", async
 
 test("exportRowsToExcel rejeita lista vazia", async () => {
   await assert.rejects(() => exportRowsToExcel([], [{ header: "ID", key: "id" }], "vazio"));
+});
+
+test("loadEnv lê .env salvo com BOM (UTF-8 com marca de ordem de bytes, comum no Windows)", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "movidesk-env-test-"));
+  const envPath = path.join(dir, ".env");
+  const bom = Buffer.from([0xef, 0xbb, 0xbf]);
+  const content = Buffer.from("TEST_BOM_VAR=funcionou\nOUTRA=valor2\n", "utf8");
+  writeFileSync(envPath, Buffer.concat([bom, content]));
+
+  const originalCwd = process.cwd();
+  delete process.env.TEST_BOM_VAR;
+  delete process.env.OUTRA;
+  try {
+    process.chdir(dir);
+    loadEnv();
+    assert.equal(process.env.TEST_BOM_VAR, "funcionou");
+    assert.equal(process.env.OUTRA, "valor2");
+  } finally {
+    process.chdir(originalCwd);
+    delete process.env.TEST_BOM_VAR;
+    delete process.env.OUTRA;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

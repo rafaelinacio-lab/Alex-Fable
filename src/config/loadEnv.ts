@@ -30,8 +30,11 @@ function findEnvFile(): string | null {
   return null;
 }
 
+const BOM = String.fromCharCode(0xfeff);
+
 function parseLine(line: string): [string, string] | null {
-  const trimmed = line.trim();
+  const withoutBom = line.startsWith(BOM) ? line.slice(BOM.length) : line;
+  const trimmed = withoutBom.trim();
   if (!trimmed || trimmed.startsWith("#")) return null;
   const eq = trimmed.indexOf("=");
   if (eq === -1) return null;
@@ -49,7 +52,13 @@ function parseLine(line: string): [string, string] | null {
 export function loadEnv(): void {
   const file = findEnvFile();
   if (!file) return;
-  const raw = readFileSync(file, "utf8");
+  let raw = readFileSync(file, "utf8");
+  // Editores no Windows (Notepad, PowerShell `>`/Out-File) costumam salvar .env como
+  // "UTF-8 com BOM" — o caractere invisível U+FEFF fica colado na PRIMEIRA linha do
+  // arquivo, corrompendo o nome da primeira variável (ex: "OPENAI_API_KEY" vira
+  // "﻿OPENAI_API_KEY" e nunca é reconhecida). Remove o BOM se presente.
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+
   for (const line of raw.split(/\r?\n/)) {
     const parsed = parseLine(line);
     if (!parsed) continue;

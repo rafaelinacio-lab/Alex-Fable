@@ -37,7 +37,10 @@ No Windows, copie o `.env.example` para `.env` na raiz do projeto (mesma pasta d
 nenhuma configuração extra: `src/config/loadEnv.ts` lê o arquivo `.env` automaticamente
 assim que o CLI inicia (é o primeiro import de `src/agent/cli.ts`). Se `npm run dev`
 reclamar de credencial faltando, confira se o `.env` está na raiz do projeto e se as
-linhas estão no formato `CHAVE=valor` sem espaços ao redor do `=`.
+linhas estão no formato `CHAVE=valor` sem espaços ao redor do `=`. `loadEnv.ts` já lida
+com `.env` salvo como "UTF-8 com BOM" (comum ao editar no Notepad ou redirecionar saída
+no PowerShell), então isso não deveria mais causar o erro — mas se persistir, tente
+recriar o `.env` com um editor de texto simples (VS Code, por exemplo).
 
 Ao rodar `npm run dev`, o terminal imprime a URL do painel (padrão
 `http://localhost:4590`) — abra no navegador para acompanhar em tempo real cada
