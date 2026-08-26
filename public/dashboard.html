@@ -113,6 +113,107 @@
   .badge-error { color: var(--err); }
   .badge-pending { color: var(--pending); }
   .empty { color: var(--muted); text-align: center; padding: 40px 0; font-size: 13px; }
+
+  .tabs {
+    display: flex;
+    gap: 4px;
+    padding: 0 24px;
+    border-bottom: 1px solid var(--panel-border);
+  }
+  .tabs button {
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    padding: 10px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+  }
+  .tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
+  .view { display: none; }
+  .view.active { display: block; }
+
+  #chatView {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 16px 24px;
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 110px);
+  }
+  #chatLog {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-bottom: 12px;
+  }
+  .bubble {
+    max-width: 80%;
+    padding: 10px 14px;
+    border-radius: 14px;
+    font-size: 14px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .bubble.user {
+    align-self: flex-end;
+    background: var(--accent);
+    color: #fff;
+    border-bottom-right-radius: 4px;
+  }
+  .bubble.assistant {
+    align-self: flex-start;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-bottom-left-radius: 4px;
+  }
+  .bubble.error {
+    align-self: flex-start;
+    background: rgba(248, 81, 73, 0.12);
+    border: 1px solid var(--err);
+    color: var(--err);
+  }
+  .bubble .meta {
+    display: block;
+    font-size: 10px;
+    opacity: 0.7;
+    margin-top: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  #chatForm {
+    display: flex;
+    gap: 8px;
+    padding-top: 12px;
+    border-top: 1px solid var(--panel-border);
+  }
+  #chatInput {
+    flex: 1;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-family: inherit;
+    resize: none;
+  }
+  #chatInput:focus { outline: none; border-color: var(--accent); }
+  #chatSend {
+    background: var(--accent);
+    border: none;
+    color: #fff;
+    padding: 0 20px;
+    border-radius: 10px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  #chatSend:disabled { opacity: 0.5; cursor: default; }
+  .typing { color: var(--muted); font-size: 12px; align-self: flex-start; padding-left: 4px; }
 </style>
 </head>
 <body>
@@ -124,22 +225,37 @@
   <div id="status" class="disconnected">conectando…</div>
 </header>
 
-<div class="stats">
-  <div class="stat"><div class="label">Chamadas de ferramenta</div><div class="value" id="statTools">0</div></div>
-  <div class="stat"><div class="label">Chamadas à API</div><div class="value" id="statApi">0</div></div>
-  <div class="stat"><div class="label">Erros</div><div class="value" id="statErrors">0</div></div>
-  <div class="stat"><div class="label">Em andamento</div><div class="value" id="statPending">0</div></div>
+<div class="tabs">
+  <button data-tab="activity" class="active">Atividade</button>
+  <button data-tab="chat">Conversa</button>
 </div>
 
-<main>
-  <div class="toolbar">
-    <button data-filter="all" class="active">Tudo</button>
-    <button data-filter="tool">Ferramentas do agente</button>
-    <button data-filter="api">Chamadas à API Movidesk</button>
-    <button data-filter="error">Só erros</button>
+<div id="activityView" class="view active">
+  <div class="stats">
+    <div class="stat"><div class="label">Chamadas de ferramenta</div><div class="value" id="statTools">0</div></div>
+    <div class="stat"><div class="label">Chamadas à API</div><div class="value" id="statApi">0</div></div>
+    <div class="stat"><div class="label">Erros</div><div class="value" id="statErrors">0</div></div>
+    <div class="stat"><div class="label">Em andamento</div><div class="value" id="statPending">0</div></div>
   </div>
-  <div id="feed"></div>
-</main>
+
+  <main>
+    <div class="toolbar">
+      <button data-filter="all" class="active">Tudo</button>
+      <button data-filter="tool">Ferramentas do agente</button>
+      <button data-filter="api">Chamadas à API Movidesk</button>
+      <button data-filter="error">Só erros</button>
+    </div>
+    <div id="feed"></div>
+  </main>
+</div>
+
+<div id="chatView" class="view">
+  <div id="chatLog"></div>
+  <form id="chatForm">
+    <textarea id="chatInput" rows="1" placeholder="Digite sua mensagem para o agente…"></textarea>
+    <button id="chatSend" type="submit">Enviar</button>
+  </form>
+</div>
 
 <script>
 (function () {
@@ -332,6 +448,111 @@
   }
 
   connect();
+
+  // --- aba "Conversa" ---
+  document.querySelectorAll(".tabs button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".tabs button").forEach((b) => b.classList.remove("active"));
+      document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
+      btn.classList.add("active");
+      document.getElementById(btn.dataset.tab + "View").classList.add("active");
+      if (btn.dataset.tab === "chat") {
+        chatInput.focus();
+        chatLog.scrollTop = chatLog.scrollHeight;
+      }
+    });
+  });
+
+  const chatLog = document.getElementById("chatLog");
+  const chatForm = document.getElementById("chatForm");
+  const chatInput = document.getElementById("chatInput");
+  const chatSend = document.getElementById("chatSend");
+  let chatWs = null;
+  let pendingBubble = null;
+
+  function chatEmptyState() {
+    if (!chatLog.children.length) {
+      chatLog.innerHTML = '<div class="empty">Nenhuma mensagem ainda. Escreva abaixo para conversar com o agente.</div>';
+    }
+  }
+
+  function addBubble(role, text, source) {
+    const empty = chatLog.querySelector(".empty");
+    if (empty) empty.remove();
+    const el = document.createElement("div");
+    el.className = "bubble " + role;
+    const meta = role === "user" ? (source === "terminal" ? "via terminal" : "") : "";
+    el.innerHTML = escapeHtml(text) + (meta ? '<span class="meta">' + meta + "</span>" : "");
+    chatLog.appendChild(el);
+    chatLog.scrollTop = chatLog.scrollHeight;
+    return el;
+  }
+
+  function showTyping() {
+    hideTyping();
+    pendingBubble = document.createElement("div");
+    pendingBubble.className = "typing";
+    pendingBubble.textContent = "agente está processando…";
+    chatLog.appendChild(pendingBubble);
+    chatLog.scrollTop = chatLog.scrollHeight;
+  }
+
+  function hideTyping() {
+    if (pendingBubble) {
+      pendingBubble.remove();
+      pendingBubble = null;
+    }
+  }
+
+  function connectChat() {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    chatWs = new WebSocket(proto + "//" + location.host + "/chat");
+
+    chatWs.onopen = () => {
+      chatSend.disabled = false;
+    };
+    chatWs.onclose = () => {
+      chatSend.disabled = true;
+      setTimeout(connectChat, 2000);
+    };
+    chatWs.onerror = () => chatWs.close();
+    chatWs.onmessage = (msg) => {
+      const data = JSON.parse(msg.data);
+      if (data.type === "chat_history") {
+        chatLog.innerHTML = "";
+        for (const m of data.messages) addBubble(m.role, m.text, m.source);
+        chatEmptyState();
+      } else if (data.type === "chat_message") {
+        hideTyping();
+        addBubble(data.message.role, data.message.text, data.message.source);
+        if (data.message.role === "user") showTyping();
+      }
+    };
+  }
+
+  chatForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const text = chatInput.value.trim();
+    if (!text || !chatWs || chatWs.readyState !== WebSocket.OPEN) return;
+    chatWs.send(JSON.stringify({ type: "user_message", text }));
+    chatInput.value = "";
+    chatInput.style.height = "auto";
+  });
+
+  chatInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      chatForm.requestSubmit();
+    }
+  });
+
+  chatInput.addEventListener("input", () => {
+    chatInput.style.height = "auto";
+    chatInput.style.height = Math.min(chatInput.scrollHeight, 160) + "px";
+  });
+
+  chatEmptyState();
+  connectChat();
 })();
 </script>
 </body>

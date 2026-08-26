@@ -50,10 +50,17 @@ ficar tentando adivinhar a causa: geralmente ou o `.env` está em outra pasta (r
 depois do `=`.
 
 Ao rodar `npm run dev`, o terminal imprime a URL do painel (padrão
-`http://localhost:4590`) — abra no navegador para acompanhar em tempo real cada
-ferramenta que o agente chama e cada requisição feita à API do Movidesk (método,
-caminho, status, duração), com input/output redigidos e truncados. Nenhum token ou
-segredo trafega para essa página — ver `src/observability/eventBus.ts`.
+`http://localhost:4590`) — abra no navegador. O painel tem duas abas:
+
+- **Atividade** — acompanha em tempo real cada ferramenta que o agente chama e cada
+  requisição feita à API do Movidesk (método, caminho, status, duração), com
+  input/output redigidos e truncados. Nenhum token ou segredo trafega para essa página —
+  ver `src/observability/eventBus.ts`.
+- **Conversa** — chat com o agente direto pelo navegador (WebSocket `/chat`,
+  `src/server/dashboard.ts`). Terminal e navegador falam com a **mesma sessão** do
+  agente — a mesma conversa, o mesmo histórico, o mesmo contador de rate limit — então
+  dá pra alternar entre os dois sem perder contexto. Se você abrir várias abas do
+  painel, todas veem as mesmas mensagens em tempo real.
 
 Para testar sem depender de AD/Movidesk reais, copie os arquivos `*.example.json` em
 `data/local/` para os nomes usados pelo `.env` (`movidesk_contatos.json`,

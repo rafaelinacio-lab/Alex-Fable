@@ -12,9 +12,6 @@ import type { AgentContext } from "./tools.js";
 import { startDashboardServer } from "../server/dashboard.js";
 
 async function main() {
-  const dashboard = startDashboardServer();
-  console.log(`Painel ao vivo: ${dashboard.url} (abra no navegador para acompanhar o agente)\n`);
-
   const authenticatedUser: AgentContext["authenticatedUser"] = {
     id_local: process.env.DEV_USER_ID ?? "dev-local",
     username: process.env.DEV_USER_USERNAME ?? "dev.local",
@@ -22,10 +19,15 @@ async function main() {
     email: process.env.DEV_USER_EMAIL ?? "dev.local@viasoft.com.br",
   };
 
+  // A sessão é criada ANTES do dashboard subir: terminal e aba "Conversa" do painel
+  // conversam com a mesma sessão/mesmo histórico — não são dois agentes separados.
   const session = new MovideskAgentSession({
     conversationId: `cli-${Date.now()}`,
     authenticatedUser,
   });
+
+  const dashboard = startDashboardServer(session);
+  console.log(`Painel ao vivo: ${dashboard.url} (abra no navegador — dá pra conversar com o agente por lá também, na aba "Conversa")\n`);
 
   const rl = readline.createInterface({ input: stdin, output: stdout });
   console.log("Agente Movidesk (dev) — digite sua mensagem. Ctrl+C para sair.\n");
@@ -34,8 +36,12 @@ async function main() {
   while (true) {
     const userText = await rl.question("Você: ");
     if (!userText.trim()) continue;
-    const reply = await session.send(userText);
-    console.log(`\nAgente: ${reply}\n`);
+    try {
+      const reply = await dashboard.sendChatMessage(userText, "terminal");
+      console.log(`\nAgente: ${reply}\n`);
+    } catch (err) {
+      console.error(`\nErro ao processar mensagem: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
   }
 }
 
