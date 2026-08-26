@@ -173,7 +173,12 @@ Boas práticas:
    $filter=clients/any(client: client/organization/id eq 'ID_DA_ORGANIZACAO')
    ```
    Esta combinação específica ainda não foi testada neste tenant — trate como tentativa fundamentada, não como certeza. Se vier erro 400, leia `propertyName`/`errorMessage` (seção 9) para ajustar. Uma vez confirmado funcionando, é uma exceção validada deste tenant e pode ser reaproveitada — mas não generalize para outros tenants sem retestar.
-4. Só informe "não encontrei chamados" depois de ter tentado a busca pela API real, não só pela lista local.
+4. **Para filtrar por período (ex: "chamados de 2026")**: o campo confirmado é `createdDate` (`docs/movidesk-api-tickets.md`, seção 12.1) — **nunca use `creation`** (não existe) nem funções como `year(...)` (não estão confirmadas como suportadas; a doc só demonstra comparação direta com `ge`/`le`, seção 6.1/6.4). Combine com o filtro de organização usando `and`:
+   ```
+   $filter=clients/any(client: client/organization/id eq 'ID_DA_ORGANIZACAO') and createdDate ge 2026-01-01T00:00:00.00z and createdDate le 2026-12-31T23:59:59.99z
+   ```
+   Se o erro 400 persistir mesmo com `createdDate` e `ge`/`le`, é sinal de outra causa (ex: a combinação `clients/any(...) and <condição simples>` pode não ser aceita pelo parser OData do Movidesk) — nesse caso, tente separar em duas chamadas (uma só por organização, outra só por data) e faça a interseção no seu lado, em vez de insistir cegamente ou perguntar ao usuário por um formato de data diferente (o formato não é o problema).
+5. Só informe "não encontrei chamados" depois de ter tentado a busca pela API real, não só pela lista local.
 
 ### Serviços, categoria e equipe
 
@@ -391,6 +396,7 @@ Se o usuário pedir "cancele e abra outro":
 - Compare o payload com um chamado correto do mesmo serviço/formulário.
 - Verifique capitalização, acentos, espaços finais e compatibilidade de regras.
 - Não tente várias grafias aleatórias em produção.
+- **Ao reportar um 400 ao usuário, sempre inclua o `errorMessage`/`propertyName` literal devolvido pela API** — nunca uma paráfrase genérica como "a consulta não foi aceita" ou "o formato pode não ser suportado". Se o erro sugere um campo/sintaxe específico (ex: nome de campo inexistente, função não suportada), corrija isso primeiro antes de pedir ao usuário para mudar algo do lado dele (ex: formato de data) — na maioria dos casos o problema é no filtro que você mesmo montou, não na informação que o usuário deu.
 
 Erros conhecidos:
 
