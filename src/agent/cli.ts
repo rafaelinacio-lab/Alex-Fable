@@ -3,6 +3,8 @@
  * Uso: npm run dev
  */
 
+import "../config/loadEnv.js"; // precisa rodar antes de qualquer import que leia process.env
+
 import readline from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 import { MovideskAgentSession } from "./orchestrator.js";

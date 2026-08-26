@@ -31,6 +31,13 @@ npm test                # smoke tests (não fazem chamadas reais ao Movidesk)
 npm run dev              # abre o REPL do agente no terminal E sobe o painel web
 ```
 
+No Windows, copie o `.env.example` para `.env` na raiz do projeto (mesma pasta do
+`package.json`) e edite os valores — não é preciso `set`/`$env:` no PowerShell nem
+nenhuma configuração extra: `src/config/loadEnv.ts` lê o arquivo `.env` automaticamente
+assim que o CLI inicia (é o primeiro import de `src/agent/cli.ts`). Se `npm run dev`
+reclamar de credencial faltando, confira se o `.env` está na raiz do projeto e se as
+linhas estão no formato `CHAVE=valor` sem espaços ao redor do `=`.
+
 Ao rodar `npm run dev`, o terminal imprime a URL do painel (padrão
 `http://localhost:4590`) — abra no navegador para acompanhar em tempo real cada
 ferramenta que o agente chama e cada requisição feita à API do Movidesk (método,
