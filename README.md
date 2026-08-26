@@ -39,8 +39,15 @@ assim que o CLI inicia (é o primeiro import de `src/agent/cli.ts`). Se `npm run
 reclamar de credencial faltando, confira se o `.env` está na raiz do projeto e se as
 linhas estão no formato `CHAVE=valor` sem espaços ao redor do `=`. `loadEnv.ts` já lida
 com `.env` salvo como "UTF-8 com BOM" (comum ao editar no Notepad ou redirecionar saída
-no PowerShell), então isso não deveria mais causar o erro — mas se persistir, tente
-recriar o `.env` com um editor de texto simples (VS Code, por exemplo).
+no PowerShell).
+
+Se `npm run dev` continuar reclamando de credencial faltando, rode `npm run check-env`
+**antes** de tentar mais nada — ele mostra, sem nunca imprimir a credencial em si, se o
+`.env` foi encontrado, em qual caminho, se tem BOM, e se cada variável chegou vazia,
+ausente ou preenchida (com tamanho e prefixo/sufixo mascarados). Isso substitui
+ficar tentando adivinhar a causa: geralmente ou o `.env` está em outra pasta (rodando
+`npm run dev` de um diretório diferente da raiz do projeto), ou a linha ficou sem valor
+depois do `=`.
 
 Ao rodar `npm run dev`, o terminal imprime a URL do painel (padrão
 `http://localhost:4590`) — abra no navegador para acompanhar em tempo real cada
