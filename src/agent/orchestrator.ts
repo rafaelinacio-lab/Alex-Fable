@@ -75,6 +75,25 @@ const TOOL_PARAMETERS: Record<ToolName, Record<string, unknown>> = {
     required: ["id"],
     additionalProperties: false,
   },
+  movidesk_get_ticket_by_protocol: {
+    type: "object",
+    properties: {
+      protocol: { type: "string" },
+      select: { type: "array", items: { type: "string" } },
+      expand: { type: "string" },
+    },
+    required: ["protocol"],
+    additionalProperties: false,
+  },
+  movidesk_get_ticket_action_html: {
+    type: "object",
+    properties: {
+      id: { type: "integer" },
+      protocol: { type: "string" },
+      action_id: { type: "integer" },
+    },
+    additionalProperties: false,
+  },
   movidesk_search_tickets: {
     type: "object",
     properties: {

@@ -86,6 +86,8 @@ O orquestrador fornece ferramentas equivalentes às abaixo (ver `src/agent/tools
 ### Movidesk
 
 - `movidesk_get_ticket(id, select?, expand?)`.
+- `movidesk_get_ticket_by_protocol(protocol, select?, expand?)` → quando o usuário fornecer o protocolo em vez do número do chamado.
+- `movidesk_get_ticket_action_html(id?, protocol?, action_id?)` → HTML de uma ação específica (o `description` normal só traz texto).
 - `movidesk_search_tickets(filter, select, orderby?, top?, skip?)`.
 - `movidesk_search_organizations(query, top?)` → busca organizações diretamente na API real do Movidesk por nome/razão social (não depende da lista local). Use como fallback de `list_customer_organizations`, ou diretamente quando o pedido do usuário for uma consulta livre (ex: "traga os chamados da organização X") e não fizer parte de um dos fluxos com catálogo confirmado.
 - `movidesk_create_ticket(payload, return_all_properties=false)`.
@@ -99,6 +101,11 @@ As ferramentas guardam a autenticação no servidor (ver `src/movidesk/client.ts
 
 ## 5. Conhecimento essencial da API Movidesk
 
+> Documentação de referência completa da API de Tickets (confirmada e versionada neste
+> repositório): [`docs/movidesk-api-tickets.md`](../docs/movidesk-api-tickets.md). Em
+> caso de dúvida sobre um endpoint, campo ou comportamento de Tickets, consulte esse
+> arquivo antes de supor.
+
 ### Recursos e métodos
 
 - Base pública documentada: `https://api.movidesk.com/public/v1`.
@@ -106,6 +113,22 @@ As ferramentas guardam a autenticação no servidor (ver `src/movidesk/client.ts
 - Pessoas: `/persons`, com GET, POST, PATCH e DELETE conforme permissões.
 - Serviços: `/services`, com GET, POST, PATCH e DELETE conforme permissões.
 - Valores de campos adicionais: `/ticketCustomFieldValue/{InsertValues|UpdateValues|DeleteValues}`, via POST. Esses endpoints alteram o cadastro global de opções; não os use durante um atendimento comum.
+- **A API não usa path REST para identificar um registro** (nunca `/tickets/123`). O
+  identificador vai sempre na query string: `GET /tickets?id=123` ou
+  `GET /tickets?protocol=MOVI202109000001`; o mesmo vale para `PATCH /tickets?id=123`.
+  Confirmado para Tickets em `docs/movidesk-api-tickets.md`; a mesma convenção é aplicada
+  também a Pessoas e Serviços neste código.
+- `GET /tickets/htmldescription?id=...&actionId=...` retorna o HTML de uma ação
+  específica — o campo `description` normal de uma ação só traz texto simples.
+- `POST /tickets` aceita `returnAllProperties` (padrão `false`) na query string; por
+  padrão a resposta só traz o `id` do chamado criado — e o Passo F já manda fazer um GET
+  de verificação depois, então normalmente não é preciso pedir `true`.
+- Tickets com `lastUpdate` há mais de 90 dias não aparecem em `/tickets` — é preciso usar
+  a rota `/tickets/past` (não detalhada na documentação disponível; valide a sintaxe
+  específica antes de depender dela para um fluxo).
+- `ticket.satisfactionSurveyResponses` está **depreciado** — nunca use como fonte de
+  respostas de pesquisa de satisfação; se o usuário pedir isso, informe que é necessária
+  a API específica de Pesquisa de Satisfação (fora do escopo deste agente por ora).
 
 ### Consultas OData
 
@@ -133,13 +156,17 @@ Boas práticas:
 - Para criar tickets, `createdBy.id` e `clients[].id` devem referenciar uma pessoa válida.
 - O solicitante deve aparecer em `clients` com `isRequester: true`.
 - Busque por e-mail quando não houver ID confiável.
-- Diferencie pessoa, agente, cliente e organização conforme `personType` e `profileType`; não invente esses números ao criar pessoas.
+- Diferencie pessoa, agente, cliente e organização conforme `personType` (`1` = Pessoa, `2` = Empresa, `4` = Departamento) e `profileType` (`1` = Agente, `2` = Cliente, `3` = Agente e Cliente) — enums confirmados em `docs/movidesk-api-tickets.md`, seção 15. Ainda assim, nunca invente um valor diferente desses sem confirmar na documentação/API.
 - Neste ambiente, a tabela local `movidesk_contatos` é a fonte preferencial para resolver e-mail → `cod_ref`.
 
 **Buscar chamados de uma organização pelo nome** (ex: "traga os chamados da organização X"):
-1. Tente `list_customer_organizations`; se não achar, use `movidesk_search_organizations` contra a API real.
+1. Tente `list_customer_organizations`; se não achar, use `movidesk_search_organizations` contra a API real (já filtra `personType eq 2`, ou seja, só organizações).
 2. Confirme com o usuário qual organização é (se houver mais de um resultado), e obtenha o `id` (cod_ref) confirmado.
-3. Não existe, neste tenant, um nome de campo OData confirmado para filtrar tickets por organização — não invente um. Monte uma primeira tentativa razoável de `$filter` sobre `clients` (ex.: relacionando `clients` ao `id` da organização) e trate um eventual erro 400 como diagnóstico: leia `propertyName`/`errorMessage` (seção 9) para descobrir o nome correto do campo. Uma vez confirmado, essa é uma exceção validada deste tenant e pode ser reaproveitada nas próximas buscas da mesma conversa — mas não generalize para outros tenants.
+3. Cada cliente dentro de `clients[]` de um ticket pode trazer `organization: {id}` (confirmado em `docs/movidesk-api-tickets.md`, seção 15), e a API suporta filtrar por item de uma coleção com `clients/any(client: <condição>)` (seção 6.6 do mesmo documento). Combine os dois como primeira tentativa:
+   ```
+   $filter=clients/any(client: client/organization/id eq 'ID_DA_ORGANIZACAO')
+   ```
+   Esta combinação específica ainda não foi testada neste tenant — trate como tentativa fundamentada, não como certeza. Se vier erro 400, leia `propertyName`/`errorMessage` (seção 9) para ajustar. Uma vez confirmado funcionando, é uma exceção validada deste tenant e pode ser reaproveitada — mas não generalize para outros tenants sem retestar.
 4. Só informe "não encontrei chamados" depois de ter tentado a busca pela API real, não só pela lista local.
 
 ### Serviços, categoria e equipe
@@ -245,7 +272,7 @@ Regras críticas:
 
 - Considere 10 requisições por minuto como limite padrão.
 - Use cache curto para pessoas, serviços e organizações.
-- Para HTTP 429, respeite `Retry-After` quando presente; caso contrário, aplique backoff com jitter.
+- Para HTTP 429, respeite `Retry-After` quando presente; caso contrário, aplique backoff com jitter. Confirmado em `docs/movidesk-api-tickets.md`: na API de Tickets, após 3 requisições seguidas com erro a API bloqueia por 60s; mais 3 erros, 120s; mais 3, 300s — ou seja, insistir sem corrigir o payload piora o bloqueio. Se um erro se repetir, pare e diagnostique (seção 9) em vez de tentar de novo.
 - Para 5xx ou falha de rede em GET, tente novamente de forma limitada.
 - Para timeout em POST/PATCH, não repita imediatamente. Primeiro consulte o registro, o log de idempotência e chamados recentes relacionados.
 - Após sucesso de POST/PATCH, uma leitura imediata pode ainda refletir estado anterior. Faça poucas verificações espaçadas, sem ultrapassar o limite.
@@ -434,6 +461,7 @@ Quando pedirem um novo fluxo:
 
 ## 13. Fontes oficiais a consultar quando houver dúvida
 
+- **Prioridade 1** — `docs/movidesk-api-tickets.md` (neste repositório): documentação da API de Tickets já verificada e versionada, com endpoints, parâmetros, enums e exemplos confirmados. Consulte antes de supor comportamento não coberto pelo prompt.
 - Visão geral da API: `https://atendimento.movidesk.com/kb/en/article/130599/api-do-movidesk`
 - API de Tickets: `https://atendimento.movidesk.com/kb/pt-br/article/256/movidesk-ticket-api`
 - API de Pessoas: `https://atendimento.movidesk.com/kb/en/article/189/movidesk-person-api`

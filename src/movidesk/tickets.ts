@@ -45,8 +45,12 @@ export interface PatchTicketPayload {
   status?: string;
   justification?: string | null;
   ownerTeam?: string;
+  owner?: { id: string };
   category?: string;
   urgency?: string;
+  subject?: string;
+  /** Lista completa desejada — enviar substitui (nunca faz merge) a lista existente. */
+  tags?: string[];
   actions?: TicketAction[];
   customFieldValues?: TicketCustomFieldValue[];
   [key: string]: unknown;
@@ -82,8 +86,27 @@ export function escapeHtml(text: string): string {
     .replace(/'/g, "&#39;");
 }
 
+/**
+ * IMPORTANTE: a API do Movidesk NÃO usa `/tickets/{id}` (path). O ticket é sempre
+ * identificado via query string: `GET /tickets?id=123` ou `GET /tickets?protocol=...`
+ * (ver docs/movidesk-api-tickets.md, seção 4). O mesmo vale para PATCH.
+ */
 export async function getTicket(id: number, select?: string[], expand?: string): Promise<TicketSummary> {
-  return movideskHttp.get<TicketSummary>(`/tickets/${id}`, { select, expand });
+  return movideskHttp.get<TicketSummary>("/tickets", { select, expand, extra: { id } });
+}
+
+export async function getTicketByProtocol(protocol: string, select?: string[], expand?: string): Promise<TicketSummary> {
+  return movideskHttp.get<TicketSummary>("/tickets", { select, expand, extra: { protocol } });
+}
+
+/** HTML de uma ação específica (o campo `description` normal só traz texto). */
+export async function getTicketActionHtml(
+  ref: { id: number } | { protocol: string },
+  actionId?: number,
+): Promise<{ id: number; description: string }> {
+  const extra: Record<string, string | number> = "id" in ref ? { id: ref.id } : { protocol: ref.protocol };
+  if (actionId !== undefined) extra.actionId = actionId;
+  return movideskHttp.get<{ id: number; description: string }>("/tickets/htmldescription", { extra });
 }
 
 export async function searchTickets(query: ODataQuery): Promise<TicketSummary[]> {
@@ -102,11 +125,7 @@ export async function createTicket(
   if (!hasRequester) {
     throw new Error("O solicitante deve aparecer em clients com isRequester: true.");
   }
-  return movideskHttp.post<{ id: number }>(
-    "/tickets",
-    payload,
-    returnAllProperties ? { select: undefined } : undefined,
-  );
+  return movideskHttp.post<{ id: number }>("/tickets", payload, { extra: { returnAllProperties } });
 }
 
 export async function patchTicket(id: number, payload: PatchTicketPayload): Promise<TicketSummary> {
@@ -116,5 +135,5 @@ export async function patchTicket(id: number, payload: PatchTicketPayload): Prom
         'caso contrário a API responde "Update both Status and Reason".',
     );
   }
-  return movideskHttp.patch<TicketSummary>(`/tickets/${id}`, payload);
+  return movideskHttp.patch<TicketSummary>("/tickets", payload, { extra: { id } });
 }

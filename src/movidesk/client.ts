@@ -34,6 +34,13 @@ export interface ODataQuery {
   top?: number;
   skip?: number;
   expand?: string;
+  /**
+   * Parâmetros extras fora do padrão OData — a API do Movidesk usa query string também
+   * para coisas como `id`, `protocol`, `actionId`, `returnAllProperties`,
+   * `includeDeletedItems` (ver docs/movidesk-api-tickets.md). NÃO existe endpoint
+   * REST por path (`/tickets/123`) — é sempre `/tickets?id=123`.
+   */
+  extra?: Record<string, string | number | boolean>;
 }
 
 /** Escapa uma string para uso seguro dentro de um filtro OData (aspas simples dobradas). */
@@ -41,7 +48,7 @@ export function odataEscape(value: string): string {
   return value.replace(/'/g, "''");
 }
 
-function buildQueryString(query: ODataQuery): string {
+export function buildQueryString(query: ODataQuery): string {
   const params = new URLSearchParams();
   if (query.filter) params.set("$filter", query.filter);
   if (query.select?.length) params.set("$select", query.select.join(","));
@@ -49,6 +56,11 @@ function buildQueryString(query: ODataQuery): string {
   if (query.top !== undefined) params.set("$top", String(query.top));
   if (query.skip !== undefined) params.set("$skip", String(query.skip));
   if (query.expand) params.set("$expand", query.expand);
+  if (query.extra) {
+    for (const [key, value] of Object.entries(query.extra)) {
+      params.set(key, String(value));
+    }
+  }
   return params.toString();
 }
 
@@ -140,13 +152,18 @@ async function requestInner<T>(opts: RequestOptions): Promise<T> {
     }
 
     if (response.status === 429) {
+      // Documentado (docs/movidesk-api-tickets.md, seção 3): após 3 requisições com erro
+      // seguidas, a API bloqueia por 60s; mais 3 erros -> 120s; mais 3 -> 300s. O header
+      // Retry-After informa o tempo restante — sempre respeite-o em vez de tentar de novo
+      // antes. NÃO insista em loop: se o bloqueio persistir, é sinal de bug no chamador
+      // (payload sempre inválido), não de instabilidade transitória.
       const retryAfterHeader = response.headers.get("Retry-After");
       const waitMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : backoffWithJitter(attempt);
       if (attempt < maxAttempts - 1) {
         await sleep(waitMs);
         continue;
       }
-      throw new MovideskApiError("Limite de requisições excedido (429).", 429);
+      throw new MovideskApiError("Limite de requisições excedido (429 - Too many failed requests).", 429);
     }
 
     if (response.status >= 500) {

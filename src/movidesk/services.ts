@@ -9,8 +9,12 @@ export interface MovideskService {
   [key: string]: unknown;
 }
 
+/**
+ * Segue a mesma convenção confirmada para /tickets (ver docs/movidesk-api-tickets.md):
+ * a API do Movidesk identifica o registro via query string (`?id=`), não path REST.
+ */
 export async function getService(id: number): Promise<MovideskService> {
-  return movideskHttp.get<MovideskService>(`/services/${id}`);
+  return movideskHttp.get<MovideskService>("/services", { extra: { id } });
 }
 
 export async function searchServices(query: ODataQuery): Promise<MovideskService[]> {

@@ -1,11 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { rmSync } from "node:fs";
-import { odataEscape } from "../src/movidesk/client.js";
+import { odataEscape, buildQueryString } from "../src/movidesk/client.js";
 import { escapeHtml, validateSubject } from "../src/movidesk/tickets.js";
 import { buildIdempotencyKey, idempotencyReserve, idempotencyPut, idempotencyGet } from "../src/store/idempotency.js";
 import { RateLimiter } from "../src/store/rateLimiter.js";
 import { getFlowConfig } from "../src/config/tenant.js";
+
+test("buildQueryString coloca id/protocol como parâmetro extra (não path) — regressão do bug de endpoint", () => {
+  const qs = buildQueryString({ extra: { id: 123 } });
+  assert.equal(qs, "id=123");
+
+  const qsProtocol = buildQueryString({ extra: { protocol: "MOVI202109000001" } });
+  assert.equal(qsProtocol, "protocol=MOVI202109000001");
+
+  const qsCombined = buildQueryString({ select: ["id", "subject"], extra: { id: 1, returnAllProperties: false } });
+  assert.equal(qsCombined, "%24select=id%2Csubject&id=1&returnAllProperties=false");
+});
 
 test("odataEscape dobra aspas simples", () => {
   assert.equal(odataEscape("O'Brien"), "O''Brien");

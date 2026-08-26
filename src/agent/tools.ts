@@ -16,7 +16,14 @@ import { z } from "zod";
 import { getFlowConfig, TENANT_FLOWS, type FlowName } from "../config/tenant.js";
 import { findContactByEmail, listOrganizations } from "../local/contacts.js";
 import { searchAdUsers } from "../local/directory.js";
-import { getTicket, searchTickets, createTicket, patchTicket } from "../movidesk/tickets.js";
+import {
+  getTicket,
+  getTicketByProtocol,
+  getTicketActionHtml,
+  searchTickets,
+  createTicket,
+  patchTicket,
+} from "../movidesk/tickets.js";
 import { getPerson, searchPersons, searchOrganizationsByName } from "../movidesk/persons.js";
 import { getService, searchServices } from "../movidesk/services.js";
 import { odataEscape, MovideskApiError } from "../movidesk/client.js";
@@ -53,6 +60,16 @@ const schemas = {
     id: z.number().int().positive(),
     select: z.array(z.string()).optional(),
     expand: z.string().optional(),
+  }),
+  movidesk_get_ticket_by_protocol: z.object({
+    protocol: z.string().min(1),
+    select: z.array(z.string()).optional(),
+    expand: z.string().optional(),
+  }),
+  movidesk_get_ticket_action_html: z.object({
+    id: z.number().int().positive().optional(),
+    protocol: z.string().min(1).optional(),
+    action_id: z.number().int().positive().optional(),
   }),
   movidesk_search_tickets: z.object({
     filter: z.string(),
@@ -107,6 +124,9 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   get_flow_config:
     "Retorna a configuração validada de um fluxo (serviço, equipe, formulário, campos adicionais, notas de comportamento confirmado). SEMPRE use esta ferramenta em vez de lembrar IDs de memória.",
   movidesk_get_ticket: "Busca um chamado Movidesk por ID.",
+  movidesk_get_ticket_by_protocol: "Busca um chamado Movidesk pelo protocolo (ex: MOVI202109000001).",
+  movidesk_get_ticket_action_html:
+    "Retorna o HTML de uma ação de um chamado (o campo description normal só traz texto). Informe id OU protocol, e opcionalmente action_id.",
   movidesk_search_tickets: "Busca chamados Movidesk via OData. $select é obrigatório.",
   movidesk_create_ticket:
     "Cria um chamado Movidesk. Exige idempotency_key (gerada previamente). Só cria de fato se a chave ainda não tiver um resultado bem-sucedido.",
@@ -207,6 +227,17 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
 
     case "movidesk_get_ticket":
       return getTicket(input.id, input.select, input.expand);
+
+    case "movidesk_get_ticket_by_protocol":
+      return getTicketByProtocol(input.protocol, input.select, input.expand);
+
+    case "movidesk_get_ticket_action_html": {
+      if (!input.id && !input.protocol) {
+        throw new Error("Informe id ou protocol para buscar o HTML da ação.");
+      }
+      const ref = input.id ? { id: input.id } : { protocol: input.protocol };
+      return getTicketActionHtml(ref, input.action_id);
+    }
 
     case "movidesk_search_tickets":
       return searchTickets({

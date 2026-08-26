@@ -9,6 +9,7 @@ chamados com validação, idempotência e auditoria — nunca expondo o token da
 
 ```
 prompts/movidesk-agent-system-prompt.md   # fonte única do comportamento do agente
+docs/movidesk-api-tickets.md               # documentação de referência da API de Tickets (endpoints, enums, exemplos)
 src/config/tenant.ts                       # IDs de serviço/campo/regra confirmados (seção 6 do prompt)
 src/movidesk/                              # cliente HTTP + recursos (tickets, persons, services)
 src/local/                                 # diretórios locais: contatos (email->cod_ref), orgs, AD
@@ -62,6 +63,15 @@ Para testar sem depender de AD/Movidesk reais, copie os arquivos `*.example.json
   (`RATE_LIMIT_PER_MINUTE`, padrão 10/min) com backoff e jitter em 429/5xx.
 - Buscas em lista (`movidesk_search_*`) exigem `$select` — não é possível listar sem
   restringir campos.
+
+## Correção importante: endpoints da API (v0.1 tinha um bug)
+
+Versões anteriores deste projeto chamavam `GET/PATCH /tickets/{id}` (ID no *path*), o
+que está **errado**. Confirmado por `docs/movidesk-api-tickets.md`: a API do Movidesk
+não usa path REST para identificar um registro — o ID vai sempre na query string
+(`GET /tickets?id=123`, `PATCH /tickets?id=123`). Isso já foi corrigido em
+`src/movidesk/tickets.ts`, `persons.ts` e `services.ts`. Se você tiver algum fork ou
+cópia anterior deste código, atualize antes de usar em produção.
 
 ## O que ainda precisa de trabalho antes de produção
 
