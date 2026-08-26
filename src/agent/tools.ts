@@ -17,7 +17,7 @@ import { getFlowConfig, TENANT_FLOWS, type FlowName } from "../config/tenant.js"
 import { findContactByEmail, listOrganizations } from "../local/contacts.js";
 import { searchAdUsers } from "../local/directory.js";
 import { getTicket, searchTickets, createTicket, patchTicket } from "../movidesk/tickets.js";
-import { getPerson, searchPersons } from "../movidesk/persons.js";
+import { getPerson, searchPersons, searchOrganizationsByName } from "../movidesk/persons.js";
 import { getService, searchServices } from "../movidesk/services.js";
 import { odataEscape, MovideskApiError } from "../movidesk/client.js";
 import { recordAuditEvent, hashPayload, newCorrelationId } from "../store/audit.js";
@@ -42,6 +42,10 @@ const schemas = {
   list_customer_organizations: z.object({
     query: z.string().default(""),
     limit: z.number().int().positive().max(50).default(10),
+  }),
+  movidesk_search_organizations: z.object({
+    query: z.string().min(1),
+    top: z.number().int().positive().max(50).default(20),
   }),
   get_flow_config: z.object({ flow_name: z.enum(FLOW_NAMES) }),
 
@@ -96,7 +100,10 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   find_movidesk_contact_by_email:
     "Resolve e-mail -> cod_ref usando o diretório local movidesk_contatos. Retorna null se não encontrar.",
   search_ad_users: "Busca colaboradores Viasoft no Active Directory por nome/usuário/e-mail.",
-  list_customer_organizations: "Busca organizações de clientes na lista local sincronizada.",
+  list_customer_organizations:
+    "Busca organizações na lista LOCAL sincronizada (fonte preferencial para fluxos com catálogo confirmado, ex: Voors, GCC). Se não encontrar nada (lista local vazia/desatualizada ou organização não coberta por esses fluxos), use movidesk_search_organizations para buscar direto na API real do Movidesk antes de dizer que a organização não existe.",
+  movidesk_search_organizations:
+    "Busca organizações direto na API real do Movidesk por nome/razão social (contains em businessName). Use como fallback quando list_customer_organizations não encontrar a organização. Retorna id (cod_ref), businessName, personType, profileType — confira esses campos para confirmar que é de fato uma organização antes de usar o id para filtrar chamados.",
   get_flow_config:
     "Retorna a configuração validada de um fluxo (serviço, equipe, formulário, campos adicionais, notas de comportamento confirmado). SEMPRE use esta ferramenta em vez de lembrar IDs de memória.",
   movidesk_get_ticket: "Busca um chamado Movidesk por ID.",
@@ -191,6 +198,9 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
 
     case "list_customer_organizations":
       return listOrganizations(input.query, input.limit);
+
+    case "movidesk_search_organizations":
+      return searchOrganizationsByName(input.query, input.top);
 
     case "get_flow_config":
       return getFlowConfig(input.flow_name);

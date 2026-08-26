@@ -48,6 +48,12 @@ const TOOL_PARAMETERS: Record<ToolName, Record<string, unknown>> = {
     properties: { query: { type: "string" }, limit: { type: "integer" } },
     additionalProperties: false,
   },
+  movidesk_search_organizations: {
+    type: "object",
+    properties: { query: { type: "string" }, top: { type: "integer" } },
+    required: ["query"],
+    additionalProperties: false,
+  },
   get_flow_config: {
     type: "object",
     properties: {

@@ -78,7 +78,7 @@ O orquestrador fornece ferramentas equivalentes às abaixo (ver `src/agent/tools
 - `get_authenticated_user()` → `{id_local, username, name, email}`.
 - `find_movidesk_contact_by_email(email)` → `{cod_ref, name, email, department}` ou vazio.
 - `search_ad_users(query, limit)` → lista de `{name, username, email, department, title}`.
-- `list_customer_organizations(query, limit)` → lista de `{cod_ref, business_name, cnpj}`.
+- `list_customer_organizations(query, limit)` → lista de `{cod_ref, business_name, cnpj}` vinda da lista LOCAL sincronizada. É a fonte preferencial para os fluxos com catálogo confirmado (ex: Voors, GCC), mas pode estar incompleta ou desatualizada. Se não encontrar a organização aqui, **não conclua que ela não existe** — use `movidesk_search_organizations` (abaixo) antes de informar ao usuário que não achou.
 - `get_flow_config(flow_name)` → IDs e valores aprovados para o fluxo.
 - `audit_log(event)` → registro estruturado sem segredos.
 - `idempotency_get(key)` e `idempotency_put(key, result)`.
@@ -87,6 +87,7 @@ O orquestrador fornece ferramentas equivalentes às abaixo (ver `src/agent/tools
 
 - `movidesk_get_ticket(id, select?, expand?)`.
 - `movidesk_search_tickets(filter, select, orderby?, top?, skip?)`.
+- `movidesk_search_organizations(query, top?)` → busca organizações diretamente na API real do Movidesk por nome/razão social (não depende da lista local). Use como fallback de `list_customer_organizations`, ou diretamente quando o pedido do usuário for uma consulta livre (ex: "traga os chamados da organização X") e não fizer parte de um dos fluxos com catálogo confirmado.
 - `movidesk_create_ticket(payload, return_all_properties=false)`.
 - `movidesk_patch_ticket(id, payload)`.
 - `movidesk_get_person(id)`.
@@ -134,6 +135,12 @@ Boas práticas:
 - Busque por e-mail quando não houver ID confiável.
 - Diferencie pessoa, agente, cliente e organização conforme `personType` e `profileType`; não invente esses números ao criar pessoas.
 - Neste ambiente, a tabela local `movidesk_contatos` é a fonte preferencial para resolver e-mail → `cod_ref`.
+
+**Buscar chamados de uma organização pelo nome** (ex: "traga os chamados da organização X"):
+1. Tente `list_customer_organizations`; se não achar, use `movidesk_search_organizations` contra a API real.
+2. Confirme com o usuário qual organização é (se houver mais de um resultado), e obtenha o `id` (cod_ref) confirmado.
+3. Não existe, neste tenant, um nome de campo OData confirmado para filtrar tickets por organização — não invente um. Monte uma primeira tentativa razoável de `$filter` sobre `clients` (ex.: relacionando `clients` ao `id` da organização) e trate um eventual erro 400 como diagnóstico: leia `propertyName`/`errorMessage` (seção 9) para descobrir o nome correto do campo. Uma vez confirmado, essa é uma exceção validada deste tenant e pode ser reaproveitada nas próximas buscas da mesma conversa — mas não generalize para outros tenants.
+4. Só informe "não encontrei chamados" depois de ter tentado a busca pela API real, não só pela lista local.
 
 ### Serviços, categoria e equipe
 
