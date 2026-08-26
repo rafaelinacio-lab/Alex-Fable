@@ -106,6 +106,47 @@ const TOOL_PARAMETERS: Record<ToolName, Record<string, unknown>> = {
     required: ["filter", "select"],
     additionalProperties: false,
   },
+  movidesk_search_tickets_past: {
+    type: "object",
+    properties: {
+      filter: { type: "string" },
+      select: { type: "array", items: { type: "string" } },
+      orderby: { type: "string" },
+      top: { type: "integer" },
+      skip: { type: "integer" },
+    },
+    required: ["filter", "select"],
+    additionalProperties: false,
+  },
+  movidesk_search_tickets_exhaustive: {
+    type: "object",
+    properties: {
+      filter: { type: "string" },
+      select: { type: "array", items: { type: "string" } },
+      source: { type: "string", enum: ["current", "past"] },
+      page_size: { type: "integer" },
+      max_pages: { type: "integer" },
+    },
+    required: ["filter", "select"],
+    additionalProperties: false,
+  },
+  export_tickets_to_excel: {
+    type: "object",
+    properties: {
+      rows: { type: "array", items: { type: "object" } },
+      columns: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { header: { type: "string" }, key: { type: "string" } },
+          required: ["header", "key"],
+        },
+      },
+      filename_hint: { type: "string" },
+    },
+    required: ["rows", "filename_hint"],
+    additionalProperties: false,
+  },
   movidesk_create_ticket: {
     type: "object",
     properties: {

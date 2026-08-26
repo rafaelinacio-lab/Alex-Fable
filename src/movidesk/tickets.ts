@@ -116,6 +116,64 @@ export async function searchTickets(query: ODataQuery): Promise<TicketSummary[]>
   return movideskHttp.get<TicketSummary[]>("/tickets", query);
 }
 
+/**
+ * `/tickets` só cobre tickets com `lastUpdate` há menos de 90 dias (ver
+ * docs/movidesk-api-tickets.md, seção 11). Para tickets mais antigos, use esta rota.
+ * A sintaxe exata de `/tickets/past` não foi detalhada na documentação disponível — os
+ * mesmos parâmetros OData de `/tickets` são assumidos por analogia, mas não estão
+ * confirmados; se a API responder de forma inesperada, trate como comportamento não
+ * documentado (seção 9) em vez de insistir.
+ */
+export async function searchTicketsPast(query: ODataQuery): Promise<TicketSummary[]> {
+  if (!query.select?.length) {
+    throw new Error("searchTicketsPast exige $select — nunca liste tickets sem restringir os campos retornados.");
+  }
+  return movideskHttp.get<TicketSummary[]>("/tickets/past", query);
+}
+
+export interface ExhaustiveSearchResult {
+  tickets: TicketSummary[];
+  pagesFetched: number;
+  /** true = paginação foi interrompida pelo limite de segurança, não porque acabaram os resultados. */
+  hitCap: boolean;
+}
+
+const DEFAULT_PAGE_SIZE = 100;
+const DEFAULT_MAX_PAGES = 20;
+
+/**
+ * Percorre TODAS as páginas de uma busca (via `$skip`) até a API devolver uma página
+ * menor que o tamanho pedido (fim real dos resultados) ou até atingir `maxPages` (limite
+ * de segurança, evita loop descontrolado / estourar o rate limit). A API do Movidesk não
+ * suporta `$count` (seção 6 da doc) — esta é a única forma de saber um total exato.
+ *
+ * `hitCap: true` no retorno significa que o total pode ser MAIOR do que o array
+ * devolvido — nunca reporte esse número como "total" sem deixar isso claro.
+ */
+export async function searchTicketsExhaustive(
+  base: Pick<ODataQuery, "filter" | "select">,
+  opts?: { pageSize?: number; maxPages?: number; source?: "current" | "past" },
+): Promise<ExhaustiveSearchResult> {
+  if (!base.select?.length) {
+    throw new Error("searchTicketsExhaustive exige select — nunca liste tickets sem restringir os campos retornados.");
+  }
+  const pageSize = opts?.pageSize ?? DEFAULT_PAGE_SIZE;
+  const maxPages = opts?.maxPages ?? DEFAULT_MAX_PAGES;
+  const fetchPage = opts?.source === "past" ? searchTicketsPast : searchTickets;
+  // orderby por id garante que $skip não pule/repita registros entre páginas.
+  const orderby = "id asc";
+
+  const all: TicketSummary[] = [];
+  for (let page = 0; page < maxPages; page++) {
+    const pageResults = await fetchPage({ ...base, orderby, top: pageSize, skip: page * pageSize });
+    all.push(...pageResults);
+    if (pageResults.length < pageSize) {
+      return { tickets: all, pagesFetched: page + 1, hitCap: false };
+    }
+  }
+  return { tickets: all, pagesFetched: maxPages, hitCap: true };
+}
+
 export async function createTicket(
   payload: CreateTicketPayload,
   returnAllProperties = false,

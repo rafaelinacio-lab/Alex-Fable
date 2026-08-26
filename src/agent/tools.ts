@@ -21,6 +21,8 @@ import {
   getTicketByProtocol,
   getTicketActionHtml,
   searchTickets,
+  searchTicketsPast,
+  searchTicketsExhaustive,
   createTicket,
   patchTicket,
 } from "../movidesk/tickets.js";
@@ -30,6 +32,7 @@ import { odataEscape, MovideskApiError } from "../movidesk/client.js";
 import { recordAuditEvent, hashPayload, newCorrelationId } from "../store/audit.js";
 import { idempotencyGet, idempotencyPut, idempotencyReserve } from "../store/idempotency.js";
 import { emitEvent, newEventId, sanitizeForDashboard } from "../observability/eventBus.js";
+import { exportRowsToExcel } from "../local/export.js";
 
 export interface AgentContext {
   conversationId: string;
@@ -77,6 +80,25 @@ const schemas = {
     orderby: z.string().optional(),
     top: z.number().int().positive().max(100).default(20),
     skip: z.number().int().nonnegative().optional(),
+  }),
+  movidesk_search_tickets_past: z.object({
+    filter: z.string(),
+    select: z.array(z.string()).min(1),
+    orderby: z.string().optional(),
+    top: z.number().int().positive().max(100).default(20),
+    skip: z.number().int().nonnegative().optional(),
+  }),
+  movidesk_search_tickets_exhaustive: z.object({
+    filter: z.string(),
+    select: z.array(z.string()).min(1),
+    source: z.enum(["current", "past"]).default("current"),
+    page_size: z.number().int().positive().max(100).default(100),
+    max_pages: z.number().int().positive().max(30).default(20),
+  }),
+  export_tickets_to_excel: z.object({
+    rows: z.array(z.record(z.string(), z.unknown())).min(1),
+    columns: z.array(z.object({ header: z.string(), key: z.string() })).optional(),
+    filename_hint: z.string().min(1),
   }),
   movidesk_create_ticket: z.object({
     idempotency_key: z.string().min(1),
@@ -127,7 +149,14 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   movidesk_get_ticket_by_protocol: "Busca um chamado Movidesk pelo protocolo (ex: MOVI202109000001).",
   movidesk_get_ticket_action_html:
     "Retorna o HTML de uma ação de um chamado (o campo description normal só traz texto). Informe id OU protocol, e opcionalmente action_id.",
-  movidesk_search_tickets: "Busca chamados Movidesk via OData. $select é obrigatório.",
+  movidesk_search_tickets:
+    "Busca chamados Movidesk via OData (rota /tickets, só cobre lastUpdate < 90 dias). $select é obrigatório. Retorna no máximo 'top' registros — para saber se há mais, compare o tamanho do retorno com 'top', ou melhor: use movidesk_search_tickets_exhaustive quando precisar do total real.",
+  movidesk_search_tickets_past:
+    "Como movidesk_search_tickets, mas na rota /tickets/past (chamados com lastUpdate há mais de 90 dias). Sintaxe assumida por analogia — não 100% confirmada; se o retorno vier estranho, trate como comportamento não documentado.",
+  movidesk_search_tickets_exhaustive:
+    "Pagina AUTOMATICAMENTE até o fim real dos resultados (ou até um limite de segurança) e devolve o total. Use SEMPRE que o usuário pedir 'todos os chamados', uma contagem/quantidade exata, ou uma exportação — nunca monte esse total manualmente somando chamadas separadas de movidesk_search_tickets. O retorno inclui hitCap/pagesFetched: se hitCap=true, o total pode ser maior que o array devolvido — reporte isso honestamente ao usuário (a API do Movidesk não suporta $count, então não há como saber o total exato além de paginar até o fim).",
+  export_tickets_to_excel:
+    "Grava um arquivo .xlsx REAL em disco (na máquina onde o agente está rodando) com as linhas fornecidas, e devolve o caminho do arquivo. Use isto sempre que o usuário pedir 'excel', 'planilha' ou 'csv' — NUNCA cole uma tabela CSV gigante como texto no chat; diga ao usuário o caminho exato do arquivo gerado.",
   movidesk_create_ticket:
     "Cria um chamado Movidesk. Exige idempotency_key (gerada previamente). Só cria de fato se a chave ainda não tiver um resultado bem-sucedido.",
   movidesk_patch_ticket:
@@ -247,6 +276,36 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
         top: input.top,
         skip: input.skip,
       });
+
+    case "movidesk_search_tickets_past":
+      return searchTicketsPast({
+        filter: input.filter,
+        select: input.select,
+        orderby: input.orderby,
+        top: input.top,
+        skip: input.skip,
+      });
+
+    case "movidesk_search_tickets_exhaustive": {
+      const result = await searchTicketsExhaustive(
+        { filter: input.filter, select: input.select },
+        { pageSize: input.page_size, maxPages: input.max_pages, source: input.source },
+      );
+      return {
+        tickets: result.tickets,
+        total_found: result.tickets.length,
+        pages_fetched: result.pagesFetched,
+        exact_total: !result.hitCap,
+        note: result.hitCap
+          ? `Atingiu o limite de segurança de ${input.max_pages} páginas (${input.page_size} por página) — pode haver mais registros além destes ${result.tickets.length}. A API do Movidesk não suporta $count; não há como confirmar o total exato sem paginar mais (aumente max_pages se precisar).`
+          : `Total exato: a última página retornou menos que ${input.page_size} registros, confirmando que não há mais resultados.`,
+      };
+    }
+
+    case "export_tickets_to_excel": {
+      const columns = input.columns ?? Object.keys(input.rows[0]).map((key: string) => ({ header: key, key }));
+      return exportRowsToExcel(input.rows, columns, input.filename_hint);
+    }
 
     case "movidesk_create_ticket": {
       const reserved = await idempotencyReserve(input.idempotency_key);

@@ -49,6 +49,21 @@ Para testar sem depender de AD/Movidesk reais, copie os arquivos `*.example.json
 `data/local/` para os nomes usados pelo `.env` (`movidesk_contatos.json`,
 `organizacoes.json`, `ad_users.json`).
 
+## Contagens exatas e exportação para Excel
+
+Duas capacidades que exigem ferramentas específicas — não confie no modelo "montando"
+isso sozinho a partir de buscas soltas:
+
+- **"Quantos chamados", "todos os chamados"** → o agente usa
+  `movidesk_search_tickets_exhaustive`, que pagina de verdade até o fim (ou até um limite
+  de segurança) e devolve `exact_total`/`hitCap`. A API do Movidesk não suporta `$count`,
+  então qualquer número que não vier dessa ferramenta é uma estimativa — o prompt instrui
+  o agente a nunca apresentar estimativa como total exato.
+- **"Me dá um Excel/planilha/CSV"** → o agente usa `export_tickets_to_excel`, que grava
+  um `.xlsx` de verdade em `EXPORTS_DIR` (padrão `./exports`, veja `.env.example`) e
+  devolve o caminho — não uma tabela colada como texto no chat. Como o agente roda como
+  processo local na sua máquina, o arquivo fica ali mesmo, pronto pra abrir.
+
 ## Segurança e operação
 
 - O `MOVIDESK_TOKEN` só existe dentro de `src/movidesk/client.ts`. O modelo nunca vê o

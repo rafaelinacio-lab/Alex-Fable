@@ -6,6 +6,7 @@ import { escapeHtml, validateSubject } from "../src/movidesk/tickets.js";
 import { buildIdempotencyKey, idempotencyReserve, idempotencyPut, idempotencyGet } from "../src/store/idempotency.js";
 import { RateLimiter } from "../src/store/rateLimiter.js";
 import { getFlowConfig } from "../src/config/tenant.js";
+import { exportRowsToExcel } from "../src/local/export.js";
 
 test("buildQueryString coloca id/protocol como parâmetro extra (não path) — regressão do bug de endpoint", () => {
   const qs = buildQueryString({ extra: { id: 123 } });
@@ -74,4 +75,36 @@ test("getFlowConfig retorna config conhecida e rejeita fluxo inválido", () => {
   assert.equal(cfg.nativeCategory, "omit");
   // @ts-expect-error fluxo inválido de propósito
   assert.throws(() => getFlowConfig("fluxo_inexistente"));
+});
+
+test("exportRowsToExcel grava um .xlsx real em disco e devolve o caminho", async () => {
+  const dir = "./exports-test";
+  rmSync(dir, { recursive: true, force: true });
+
+  const result = await exportRowsToExcel(
+    [
+      { id: 1, subject: "Ação çãéíóú", status: "Novo" },
+      { id: 2, subject: "Outro", status: "Fechado" },
+    ],
+    [
+      { header: "ID", key: "id" },
+      { header: "Assunto", key: "subject" },
+      { header: "Status", key: "status" },
+    ],
+    "VIASOFT CORONEL VIVIDA 2026",
+    { dir },
+  );
+
+  assert.equal(result.rowCount, 2);
+  assert.ok(result.path.endsWith(".xlsx"));
+  assert.match(result.path, /VIASOFT_CORONEL_VIVIDA_2026_/);
+
+  const { existsSync } = await import("node:fs");
+  assert.ok(existsSync(result.path), "arquivo deveria existir em disco");
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("exportRowsToExcel rejeita lista vazia", async () => {
+  await assert.rejects(() => exportRowsToExcel([], [{ header: "ID", key: "id" }], "vazio"));
 });
