@@ -5,6 +5,10 @@ Implementação de referência do agente descrito em
 agente que conversa com o usuário, resolve o solicitante, consulta o Movidesk e cria/altera
 chamados com validação, idempotência e auditoria — nunca expondo o token da API ao modelo.
 
+> **Documentação completa** (o que o agente faz, arquitetura, capacidades, fluxos
+> suportados, histórico de decisões): [`docs/DOCUMENTACAO.md`](./docs/DOCUMENTACAO.md).
+> Este README foca em como instalar e rodar.
+
 ## Estrutura
 
 ```
