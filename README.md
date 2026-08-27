@@ -72,10 +72,14 @@ Duas capacidades que exigem ferramentas específicas — não confie no modelo "
 isso sozinho a partir de buscas soltas:
 
 - **"Quantos chamados", "todos os chamados"** → o agente usa
-  `movidesk_search_tickets_exhaustive`, que pagina de verdade até o fim (ou até um limite
-  de segurança) e devolve `exact_total`/`hitCap`. A API do Movidesk não suporta `$count`,
-  então qualquer número que não vier dessa ferramenta é uma estimativa — o prompt instrui
-  o agente a nunca apresentar estimativa como total exato.
+  `movidesk_search_tickets_exhaustive`, que pagina de verdade até o fim (até 150 páginas /
+  ~15.000 registros de limite de segurança) e devolve `exact_total`/`hitCap`. A API do
+  Movidesk não suporta `$count`, então qualquer número que não vier dessa ferramenta é uma
+  estimativa — o prompt instrui o agente a nunca apresentar estimativa como total exato.
+  Isso é uma única chamada de ferramenta que roda até o fim sozinha (pode levar minutos
+  em volumes grandes, por causa do rate limit de 10 req/min) — o prompt também instrui o
+  agente a não interromper essa busca pedindo confirmação a cada lote de 100, nem cair de
+  volta em paginação manual conversando sobre cada página.
 - **"Me dá um Excel/planilha/CSV"** → o agente usa `export_tickets_to_excel`, que grava
   um `.xlsx` de verdade em `EXPORTS_DIR` (padrão `./exports`, veja `.env.example`) e
   devolve o caminho — não uma tabela colada como texto no chat. Como o agente roda como

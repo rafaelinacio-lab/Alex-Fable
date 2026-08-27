@@ -93,7 +93,7 @@ const schemas = {
     select: z.array(z.string()).min(1),
     source: z.enum(["current", "past"]).default("current"),
     page_size: z.number().int().positive().max(100).default(100),
-    max_pages: z.number().int().positive().max(30).default(20),
+    max_pages: z.number().int().positive().max(150).default(50),
   }),
   export_tickets_to_excel: z.object({
     rows: z.array(z.record(z.string(), z.unknown())).min(1),
@@ -297,7 +297,7 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
         pages_fetched: result.pagesFetched,
         exact_total: !result.hitCap,
         note: result.hitCap
-          ? `Atingiu o limite de segurança de ${input.max_pages} páginas (${input.page_size} por página) — pode haver mais registros além destes ${result.tickets.length}. A API do Movidesk não suporta $count; não há como confirmar o total exato sem paginar mais (aumente max_pages se precisar).`
+          ? `Atingiu o limite de segurança de ${input.max_pages} páginas (${input.page_size} por página) — pode haver mais registros além destes ${result.tickets.length}. A API do Movidesk não suporta $count. Se precisar do total real, chame esta mesma ferramenta DE NOVO com max_pages maior (até 150) em vez de paginar manualmente com movidesk_search_tickets — isso é uma única chamada de ferramenta, não uma série de confirmações com o usuário.`
           : `Total exato: a última página retornou menos que ${input.page_size} registros, confirmando que não há mais resultados.`,
       };
     }

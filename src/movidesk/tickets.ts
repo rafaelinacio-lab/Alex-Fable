@@ -139,13 +139,19 @@ export interface ExhaustiveSearchResult {
 }
 
 const DEFAULT_PAGE_SIZE = 100;
-const DEFAULT_MAX_PAGES = 20;
+const DEFAULT_MAX_PAGES = 50;
 
 /**
  * Percorre TODAS as páginas de uma busca (via `$skip`) até a API devolver uma página
  * menor que o tamanho pedido (fim real dos resultados) ou até atingir `maxPages` (limite
  * de segurança, evita loop descontrolado / estourar o rate limit). A API do Movidesk não
  * suporta `$count` (seção 6 da doc) — esta é a única forma de saber um total exato.
+ *
+ * Isto é uma sequência de GETs — não precisa de confirmação do usuário nem de pausas
+ * entre páginas (seção 3 do prompt de sistema: consultas GET podem ser executadas sem
+ * nova confirmação). O tempo total é limitado pelo rate limit (10 req/min por padrão):
+ * `maxPages=50` com `pageSize=100` pode levar até ~5 minutos para 5.000 registros — isso
+ * é esperado, não é motivo para parar e perguntar se deve continuar.
  *
  * `hitCap: true` no retorno significa que o total pode ser MAIOR do que o array
  * devolvido — nunca reporte esse número como "total" sem deixar isso claro.
