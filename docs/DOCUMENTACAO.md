@@ -207,11 +207,17 @@ Registro do que já foi corrigido, para não reintroduzir os mesmos problemas:
     sintaxe OData não testada.
 12. **Conversa mais fluida em consultas amplas**: antes o agente ou executava buscas sem
     escopo claro (ex: "todos os chamados" sem período) ou fazia listas formais de
-    esclarecimento. Agora, para consultas (nunca para criar/alterar chamado), faz uma
-    pergunta natural e direta sobre o que falta (tipicamente período e status
-    aberto/finalizado) antes de rodar a busca — ver "Consultas amplas" no Passo A do
-    prompt de sistema. Reforçado explicitamente: esse fluxo de consulta é só leitura,
-    nunca dispara `movidesk_create_ticket`/`movidesk_patch_ticket` por conta própria.
+    esclarecimento. Agora, para consultas (nunca para criar/alterar chamado), pergunta
+    status primeiro (aberto/finalizado/todos) e só pergunta período se o status não for
+    "em aberto" — chamados em aberto são um recorte já limitado por natureza, então
+    perguntar período nesse caso é fricção desnecessária (ex: "todos os chamados em
+    aberto do serviço X" já tem status explícito e não precisa de nenhuma pergunta). Ver
+    "Consultas amplas" no Passo A do prompt de sistema. A instrução original ficou
+    embutida demais no meio do prompt e foi ignorada em teste real; promovida a regra em
+    destaque logo no topo da seção 2 (Princípios obrigatórios) para ficar mais difícil de
+    ser deprioritizada pelo modelo. Reforçado explicitamente: esse fluxo de consulta é só
+    leitura, nunca dispara `movidesk_create_ticket`/`movidesk_patch_ticket` por conta
+    própria.
 
 ## 9. Limitações conhecidas
 
