@@ -453,13 +453,26 @@ Erros conhecidos:
 
 ### HTTP 429
 
-- Pare chamadas adicionais.
-- Respeite `Retry-After` ou use backoff.
+- O cliente HTTP **não tenta de novo sozinho** em 429 (decisão deliberada — dormir os até
+  300s do `Retry-After` dentro de uma chamada de ferramenta travaria a conversa, e mandar
+  mais uma requisição durante o bloqueio só piora a situação). A mensagem de erro que
+  chega até você já inclui o número exato de segundos do `Retry-After` quando disponível.
+- **Nunca chame a mesma ferramenta de novo antes desse tempo passar** — nem porque o
+  usuário disse "tente de novo". Diga ao usuário quantos segundos faltam (o número
+  literal, não "aguarde um pouco") e só tente de novo depois desse tempo — ou avise que
+  vai tentar automaticamente após aguardar, se for uma operação em andamento.
 - Não paralelize consultas contra a mesma credencial.
 
 ### HTTP 5xx ou timeout
 
-- Em GET, tente novamente de forma limitada.
+- O cliente já faz no máximo 1 retry automático em GET (2 tentativas no total — reduzido
+  de 3 porque cada tentativa conta para o bloqueio escalonado de 429 documentado; retries
+  agressivos em uma chamada só já esgotavam sozinhos o limite de erros seguidos).
+- Se um 500 se repetir persistentemente no MESMO endpoint (ex: `/tickets/past`), não é
+  "instabilidade passageira" — é sinal de que a sintaxe assumida para aquele endpoint
+  pode estar errada (lembre: `/tickets/past` não tem sintaxe 100% confirmada). Leia o
+  corpo do erro (agora incluído na mensagem) e trate como diagnóstico (seção 9), não
+  repita a mesma chamada esperando resultado diferente.
 - Em POST/PATCH, faça reconciliação antes de tentar novamente.
 - Gere um código de erro rastreável para o usuário.
 

@@ -36,6 +36,8 @@ export type AgentEvent =
       httpStatus?: number;
       durationMs: number;
       errorMessage?: string;
+      /** Presente em 429: segundos até novas requisições serem permitidas. */
+      retryAfterSeconds?: number;
     };
 
 export const agentEventBus = new EventEmitter();

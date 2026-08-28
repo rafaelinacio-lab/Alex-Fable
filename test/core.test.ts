@@ -1,7 +1,9 @@
+import "./setupEnv.js"; // precisa ser o primeiro import — ver comentário no arquivo
+
 import assert from "node:assert/strict";
 import test from "node:test";
 import { rmSync } from "node:fs";
-import { odataEscape, buildQueryString } from "../src/movidesk/client.js";
+import { odataEscape, buildQueryString, movideskHttp, MovideskApiError } from "../src/movidesk/client.js";
 import { escapeHtml, validateSubject } from "../src/movidesk/tickets.js";
 import { buildIdempotencyKey, idempotencyReserve, idempotencyPut, idempotencyGet } from "../src/store/idempotency.js";
 import { RateLimiter } from "../src/store/rateLimiter.js";
@@ -175,4 +177,53 @@ test("catálogo local de serviços resolve nome -> hierarquias e id -> serviço"
 
   const notFound = await getKnownServiceById(999999999);
   assert.equal(notFound, null);
+});
+
+test("429 nunca faz retry automático (evita piorar o bloqueio escalonado) e expõe retryAfterSeconds", async () => {
+  const originalFetch = global.fetch;
+  let callCount = 0;
+  global.fetch = (async () => {
+    callCount++;
+    return new Response("", { status: 429, headers: { "Retry-After": "42" } });
+  }) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      () => movideskHttp.get("/tickets", { select: ["id"] }),
+      (err: unknown) => {
+        assert.ok(err instanceof MovideskApiError);
+        assert.equal(err.status, 429);
+        assert.equal(err.retryAfterSeconds, 42);
+        assert.match(err.message, /42 segundos/);
+        return true;
+      },
+    );
+    assert.equal(callCount, 1, "não deveria repetir a requisição em 429");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("5xx faz no máximo 1 retry (2 tentativas totais, não 3) e inclui o corpo na mensagem", async () => {
+  const originalFetch = global.fetch;
+  let callCount = 0;
+  global.fetch = (async () => {
+    callCount++;
+    return new Response(JSON.stringify({ detail: "falha interna simulada" }), { status: 500 });
+  }) as typeof fetch;
+
+  try {
+    await assert.rejects(
+      () => movideskHttp.get("/tickets/past", { select: ["id"] }),
+      (err: unknown) => {
+        assert.ok(err instanceof MovideskApiError);
+        assert.equal(err.status, 500);
+        assert.match(err.message, /falha interna simulada/);
+        return true;
+      },
+    );
+    assert.equal(callCount, 2, "esperava 1 tentativa original + 1 retry, não 3");
+  } finally {
+    global.fetch = originalFetch;
+  }
 });

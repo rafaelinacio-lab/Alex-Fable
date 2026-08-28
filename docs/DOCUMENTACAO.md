@@ -191,6 +191,14 @@ Registro do que já foi corrigido, para não reintroduzir os mesmos problemas:
    de montar o filtro `serviceFull` — evita a ambiguidade descoberta no item 8 (ex:
    "Construshow" existe 8 vezes sob hierarquias diferentes, todas com o mesmo `nome` mas
    `servico`/id distintos).
+10. **Retry em GET provocava o próprio bloqueio 429 que deveria evitar**: o cliente tentava
+    até 3 vezes em 5xx, e a API conta requisições com erro para o bloqueio escalonado
+    (3 erros seguidos -> 60s, +3 -> 120s, +3 -> 300s) — uma única chamada de ferramenta
+    contra um endpoint com problema (ex: `/tickets/past`) já bastava para travar o agente
+    sozinha. Corrigido: máximo 2 tentativas em 5xx (não 3), 429 nunca faz retry automático
+    (evita dormir minutos dentro de uma chamada de ferramenta e mandar requisição durante
+    o bloqueio), e a mensagem de erro passou a incluir o `Retry-After` exato e o corpo do
+    erro 500 — antes descartados.
 
 ## 9. Limitações conhecidas
 

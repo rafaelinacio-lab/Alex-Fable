@@ -393,7 +393,12 @@
       '</span></div><div class="time">' +
       fmtTime(ev.timestamp) +
       " · " + badge + ' · <span class="duration">' + ev.durationMs + "ms</span></div></div>" +
-      (ev.status === "error" ? "<pre>" + escapeHtml(ev.errorMessage || "") + "</pre>" : "");
+      (ev.status === "error"
+        ? "<pre>" +
+          escapeHtml(ev.errorMessage || "") +
+          (ev.retryAfterSeconds ? "\n\nRetry-After: " + ev.retryAfterSeconds + "s" : "") +
+          "</pre>"
+        : "");
     const item = items.find((i) => i.id === ev.id);
     if (item) item.status = ev.status;
     updateStats();

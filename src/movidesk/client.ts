@@ -21,6 +21,8 @@ export class MovideskApiError extends Error {
     public readonly propertyName?: string,
     public readonly body?: unknown,
     public readonly correlationId?: string,
+    /** Presente em 429: segundos até novas requisições serem permitidas (header Retry-After). */
+    public readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = "MovideskApiError";
@@ -113,6 +115,7 @@ async function request<T>(opts: RequestOptions): Promise<T> {
       httpStatus: err instanceof MovideskApiError ? err.status : undefined,
       durationMs: Date.now() - start,
       errorMessage: err instanceof Error ? err.message : String(err),
+      retryAfterSeconds: err instanceof MovideskApiError ? err.retryAfterSeconds : undefined,
     });
     throw err;
   }
@@ -129,7 +132,13 @@ async function requestInner<T>(opts: RequestOptions): Promise<T> {
   const separator = qs ? "?" : "";
   const url = `${BASE_URL}${opts.path}${separator}${qs}${qs ? "&" : "?"}token=${encodeURIComponent(TOKEN)}`;
 
-  const maxAttempts = opts.retryOnServerError ? 3 : 1;
+  // IMPORTANTE: cada tentativa é uma requisição real ao Movidesk, e a própria API conta
+  // requisições com erro para o bloqueio escalonado documentado (3 erros seguidos -> 60s,
+  // +3 -> 120s, +3 -> 300s — ver docs/movidesk-api-tickets.md, seção 3). Um valor alto
+  // aqui faz uma ÚNICA chamada de ferramenta já consumir sozinha o "orçamento" de falhas
+  // e travar o agente antes mesmo dele conseguir avisar o usuário. Por isso o máximo é 2
+  // (1 tentativa original + 1 retry), não 3.
+  const maxAttempts = opts.retryOnServerError ? 2 : 1;
   let lastError: unknown;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -153,25 +162,55 @@ async function requestInner<T>(opts: RequestOptions): Promise<T> {
 
     if (response.status === 429) {
       // Documentado (docs/movidesk-api-tickets.md, seção 3): após 3 requisições com erro
-      // seguidas, a API bloqueia por 60s; mais 3 erros -> 120s; mais 3 -> 300s. O header
-      // Retry-After informa o tempo restante — sempre respeite-o em vez de tentar de novo
-      // antes. NÃO insista em loop: se o bloqueio persistir, é sinal de bug no chamador
-      // (payload sempre inválido), não de instabilidade transitória.
+      // seguidas, a API bloqueia por 60s; mais 3 erros -> 120s; mais 3 -> 300s. NUNCA
+      // retry automático aqui: dormir o Retry-After (pode ser até 300s) dentro de uma
+      // chamada de ferramenta travaria a conversa inteira por minutos, e mandar mais uma
+      // requisição enquanto o bloqueio ainda vale só piora a situação. Falha imediato e
+      // devolve o tempo de espera para quem chamou decidir o que fazer.
       const retryAfterHeader = response.headers.get("Retry-After");
-      const waitMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : backoffWithJitter(attempt);
-      if (attempt < maxAttempts - 1) {
-        await sleep(waitMs);
-        continue;
-      }
-      throw new MovideskApiError("Limite de requisições excedido (429 - Too many failed requests).", 429);
+      const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : undefined;
+      // O texto da mensagem inclui o tempo de espera diretamente porque é isto que chega
+      // até o modelo (o orquestrador propaga err.message como resultado da ferramenta) —
+      // sem isso o agente não tem como saber quanto tempo esperar antes de tentar de novo.
+      const waitInfo =
+        retryAfterSeconds !== undefined
+          ? ` Aguarde ${retryAfterSeconds} segundos antes de tentar de novo — NÃO tente antes disso, cada tentativa dentro do bloqueio piora/renova o tempo de espera.`
+          : " Aguarde antes de tentar de novo.";
+      throw new MovideskApiError(
+        `Limite de requisições excedido (429 - Too many failed requests).${waitInfo}`,
+        429,
+        undefined,
+        undefined,
+        undefined,
+        retryAfterSeconds,
+      );
     }
 
     if (response.status >= 500) {
+      // Lê o corpo mesmo em 5xx — às vezes o Movidesk devolve detalhe útil, e sem isso
+      // não há como diagnosticar por que um endpoint específico (ex: /tickets/past) está
+      // falhando de forma consistente.
+      let body: unknown;
+      try {
+        body = await response.json();
+      } catch {
+        body = await response.text().catch(() => undefined);
+      }
       if (opts.retryOnServerError && attempt < maxAttempts - 1) {
         await sleep(backoffWithJitter(attempt));
         continue;
       }
-      throw new MovideskApiError(`Erro no servidor Movidesk (${response.status}).`, response.status);
+      // O corpo entra na mensagem (truncado) porque é isto que chega até o modelo — sem
+      // isso um 500 persistente em um endpoint específico (ex: /tickets/past) não tem
+      // como ser diagnosticado, só "deu erro" repetido.
+      const bodyText = typeof body === "string" ? body : JSON.stringify(body);
+      const bodySnippet = bodyText && bodyText !== "{}" ? ` Corpo: ${bodyText.slice(0, 500)}` : "";
+      throw new MovideskApiError(
+        `Erro no servidor Movidesk (${response.status}) em ${opts.method} ${opts.path}.${bodySnippet}`,
+        response.status,
+        undefined,
+        body,
+      );
     }
 
     const correlationId = response.headers.get("x-correlation-id") ?? undefined;
