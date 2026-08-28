@@ -74,7 +74,7 @@ Só o módulo `src/movidesk/client.ts` lê `MOVIDESK_TOKEN` do ambiente.
 | `src/config/checkEnv.ts` | Diagnóstico de configuração (`npm run check-env`) |
 | `src/movidesk/client.ts` | Cliente HTTP — único lugar que lê o token; rate limit, retry/backoff |
 | `src/movidesk/{tickets,persons,services}.ts` | Operações tipadas por recurso |
-| `src/local/{contacts,directory,export}.ts` | Diretório local de contatos/organizações, busca AD, exportação Excel |
+| `src/local/{contacts,directory,export,serviceCatalog}.ts` | Diretório local de contatos/organizações, busca AD, exportação Excel, catálogo de serviços |
 | `src/store/{audit,idempotency,rateLimiter}.ts` | Auditoria, idempotência de criação, limitador de requisições |
 | `src/agent/tools.ts` | Contrato de ferramentas — schemas zod + dispatch, único ponto de contato com o modelo |
 | `src/agent/orchestrator.ts` | Loop de function-calling com a API da OpenAI |
@@ -105,7 +105,7 @@ Só o módulo `src/movidesk/client.ts` lê `MOVIDESK_TOKEN` do ambiente.
 Especificação completa na seção 4 do prompt de sistema. Categorias:
 
 - **Contexto/local**: `get_authenticated_user`, `find_movidesk_contact_by_email`,
-  `search_ad_users`, `list_customer_organizations`, `get_flow_config`.
+  `search_ad_users`, `list_customer_organizations`, `list_known_services`, `get_flow_config`.
 - **Leitura Movidesk**: `movidesk_get_ticket[_by_protocol]`, `movidesk_get_ticket_action_html`,
   `movidesk_search_tickets[_past]`, `movidesk_search_tickets_exhaustive`,
   `movidesk_search_organizations`, `movidesk_get_person`, `movidesk_search_persons`,
@@ -186,6 +186,11 @@ Registro do que já foi corrigido, para não reintroduzir os mesmos problemas:
    `serviceFull/any(s: s eq 'Nome do Serviço')`. Documentado na seção "Serviços, categoria
    e equipe" do prompt de sistema — importante porque pode haver múltiplos serviços
    cadastrados com o mesmo nome e IDs diferentes.
+9. **Catálogo de serviços** (`data/local/servicos.json`, ferramenta `list_known_services`):
+   exportação oficial do Movidesk (78 serviços) usada para resolver `nome`/`servico` antes
+   de montar o filtro `serviceFull` — evita a ambiguidade descoberta no item 8 (ex:
+   "Construshow" existe 8 vezes sob hierarquias diferentes, todas com o mesmo `nome` mas
+   `servico`/id distintos).
 
 ## 9. Limitações conhecidas
 

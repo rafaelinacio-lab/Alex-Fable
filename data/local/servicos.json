@@ -1,0 +1,626 @@
+[
+  {
+    "id": 93248,
+    "servico": "Agronegócio",
+    "nome": "Agronegócio",
+    "descricao": "Unidade Agrotitan",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 467075,
+    "servico": "Agrotitan Fazendas",
+    "nome": "Agrotitan Fazendas",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 335214,
+    "servico": "Analytics - B.I",
+    "nome": "Analytics - B.I",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 93249,
+    "servico": "Automação Comercial",
+    "nome": "Automação Comercial",
+    "descricao": "Unidade Automação Comercial",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1096037,
+    "servico": "Canais",
+    "nome": "Canais",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 109051,
+    "servico": "Combustíveis",
+    "nome": "Combustíveis",
+    "descricao": "Unidade Petroshow",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1171844,
+    "servico": "Comitê de IA",
+    "nome": "Comitê de IA",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 131281,
+    "servico": "Construshow",
+    "nome": "Construshow",
+    "descricao": "Unidade Construshow",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1076780,
+    "servico": "CRM",
+    "nome": "CRM",
+    "descricao": "Unidade de Negócios CRM",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1158356,
+    "servico": "Facilities",
+    "nome": "Facilities",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 629483,
+    "servico": "Filt",
+    "nome": "Filt",
+    "descricao": "Unidade de Negócios Nimitz/Filt",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 491544,
+    "servico": "Financeiro",
+    "nome": "Financeiro",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 93247,
+    "servico": "Fisco Contábil",
+    "nome": "Fisco Contábil",
+    "descricao": "Unidade Fiscal",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1283292,
+    "servico": "GCC",
+    "nome": "GCC",
+    "descricao": "Gestão de Combate ao Churn",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1283293,
+    "servico": "GCC » Agronegócio",
+    "nome": "Agronegócio",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1283300,
+    "servico": "GCC » Agrotitan Fazendas",
+    "nome": "Agrotitan Fazendas",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1283303,
+    "servico": "GCC » Analytics B.I.",
+    "nome": "Analytics B.I.",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1283299,
+    "servico": "GCC » Automação Comercial",
+    "nome": "Automação Comercial",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1283295,
+    "servico": "GCC » Combustíveis",
+    "nome": "Combustíveis",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1283294,
+    "servico": "GCC » Construshow",
+    "nome": "Construshow",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1283302,
+    "servico": "GCC » CRM",
+    "nome": "CRM",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1355662,
+    "servico": "GCC » Filt",
+    "nome": "Filt",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1283304,
+    "servico": "GCC » Serviços Fiscais",
+    "nome": "Serviços Fiscais",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1283306,
+    "servico": "GCC » Sistema para RH",
+    "nome": "Sistema para RH",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1283296,
+    "servico": "GCC » Supermercados",
+    "nome": "Supermercados",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1283297,
+    "servico": "GCC » Voors",
+    "nome": "Voors",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 991087,
+    "servico": "HOK Cursos",
+    "nome": "HOK Cursos",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1039651,
+    "servico": "HOK Cursos » Agrotitan",
+    "nome": "Agrotitan",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1039653,
+    "servico": "HOK Cursos » Construshow",
+    "nome": "Construshow",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 463136,
+    "servico": "IFACT",
+    "nome": "IFACT",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 856419,
+    "servico": "Implantação » Agronegócio",
+    "nome": "Agronegócio",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": false
+  },
+  {
+    "id": 1096023,
+    "servico": "Implantação » Agrotitan Fazendas",
+    "nome": "Agrotitan Fazendas",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": false
+  },
+  {
+    "id": 856420,
+    "servico": "Implantação » Combustíveis",
+    "nome": "Combustíveis",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": false
+  },
+  {
+    "id": 856421,
+    "servico": "Implantação » Construshow",
+    "nome": "Construshow",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": false
+  },
+  {
+    "id": 1285044,
+    "servico": "Implantação » CRM",
+    "nome": "CRM",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": false
+  },
+  {
+    "id": 921610,
+    "servico": "Implantação » Filt",
+    "nome": "Filt",
+    "descricao": "Unidade de Negócios Nimitz",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": false
+  },
+  {
+    "id": 1019202,
+    "servico": "Implantação » Franquias",
+    "nome": "Franquias",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": false
+  },
+  {
+    "id": 856422,
+    "servico": "Implantação » Supermercados",
+    "nome": "Supermercados",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": false
+  },
+  {
+    "id": 1096025,
+    "servico": "Implantação » Talent RH",
+    "nome": "Talent RH",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": false
+  },
+  {
+    "id": 1156154,
+    "servico": "Migração",
+    "nome": "Migração",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1156159,
+    "servico": "Migração » Agrotitan",
+    "nome": "Agrotitan",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1156156,
+    "servico": "Migração » Construshow",
+    "nome": "Construshow",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1156163,
+    "servico": "Migração » Fisco Contábil",
+    "nome": "Fisco Contábil",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1156157,
+    "servico": "Migração » Petroshow",
+    "nome": "Petroshow",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1156162,
+    "servico": "Migração » TalentRH",
+    "nome": "TalentRH",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1156160,
+    "servico": "Migração » Viasuper",
+    "nome": "Viasuper",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 561055,
+    "servico": "Oracle Cloud",
+    "nome": "Oracle Cloud",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 561056,
+    "servico": "Oracle Cloud » Agronegócio",
+    "nome": "Agronegócio",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1097743,
+    "servico": "Oracle Cloud » Automação Comercial",
+    "nome": "Automação Comercial",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 561057,
+    "servico": "Oracle Cloud » Combustíveis",
+    "nome": "Combustíveis",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 561058,
+    "servico": "Oracle Cloud » Construshow",
+    "nome": "Construshow",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1097744,
+    "servico": "Oracle Cloud » CRM",
+    "nome": "CRM",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 561059,
+    "servico": "Oracle Cloud » Fisco Contábil",
+    "nome": "Fisco Contábil",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 561062,
+    "servico": "Oracle Cloud » Forlog",
+    "nome": "Forlog",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1097741,
+    "servico": "Oracle Cloud » PSGA",
+    "nome": "PSGA",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 561060,
+    "servico": "Oracle Cloud » Sistemas Para RH",
+    "nome": "Sistemas Para RH",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 561061,
+    "servico": "Oracle Cloud » Supermercados",
+    "nome": "Supermercados",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1123800,
+    "servico": "Oracle Cloud » Varejo",
+    "nome": "Varejo",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 143366,
+    "servico": "Ouvidoria",
+    "nome": "Ouvidoria",
+    "descricao": "Ouvidoria",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1232940,
+    "servico": "Paralisações",
+    "nome": "Paralisações",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1232941,
+    "servico": "Paralisações » Agrotitan",
+    "nome": "Agrotitan",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1232942,
+    "servico": "Paralisações » Construshow",
+    "nome": "Construshow",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1232943,
+    "servico": "Paralisações » Petroshow",
+    "nome": "Petroshow",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1250731,
+    "servico": "Paralisações » Voors",
+    "nome": "Voors",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1010177,
+    "servico": "Personalizações » Agronegócio",
+    "nome": "Agronegócio",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": false
+  },
+  {
+    "id": 1278634,
+    "servico": "Personalizações » Agrotitan Fazendas",
+    "nome": "Agrotitan Fazendas",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": false
+  },
+  {
+    "id": 1010183,
+    "servico": "Personalizações » Aut. Comercial",
+    "nome": "Aut. Comercial",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": false
+  },
+  {
+    "id": 1010179,
+    "servico": "Personalizações » Construshow",
+    "nome": "Construshow",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": false
+  },
+  {
+    "id": 1278636,
+    "servico": "Personalizações » Fisco Contábil",
+    "nome": "Fisco Contábil",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": false
+  },
+  {
+    "id": 1010180,
+    "servico": "Personalizações » Petroshow",
+    "nome": "Petroshow",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": false
+  },
+  {
+    "id": 1059203,
+    "servico": "Personalizações » Sistema para RH",
+    "nome": "Sistema para RH",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": false
+  },
+  {
+    "id": 1010181,
+    "servico": "Personalizações » Supermercados",
+    "nome": "Supermercados",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": false
+  },
+  {
+    "id": 1278623,
+    "servico": "Personalizações » Voors",
+    "nome": "Voors",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": false
+  },
+  {
+    "id": 131277,
+    "servico": "Sistema para RH",
+    "nome": "Sistema para RH",
+    "descricao": "Unidade TalentRH",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 216138,
+    "servico": "Sistemas Internos",
+    "nome": "Sistemas Internos",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 131276,
+    "servico": "Supermercados",
+    "nome": "Supermercados",
+    "descricao": "Unidade Viasuper",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 1074106,
+    "servico": "Tecnologia",
+    "nome": "Tecnologia",
+    "descricao": "",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  },
+  {
+    "id": 160001,
+    "servico": "Voors",
+    "nome": "Voors",
+    "descricao": "Unidade Gestão de Pessoas.",
+    "disponivelParaTickets": "Tickets públicos e internos",
+    "ativo": true
+  }
+]

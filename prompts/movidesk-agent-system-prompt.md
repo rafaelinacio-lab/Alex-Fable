@@ -82,6 +82,7 @@ O orquestrador fornece ferramentas equivalentes às abaixo (ver `src/agent/tools
 - `find_movidesk_contact_by_email(email)` → `{cod_ref, name, email, department}` ou vazio.
 - `search_ad_users(query, limit)` → lista de `{name, username, email, department, title}`.
 - `list_customer_organizations(query, limit)` → lista de `{cod_ref, business_name, cnpj}` vinda da lista LOCAL sincronizada. É a fonte preferencial para os fluxos com catálogo confirmado (ex: Voors, GCC), mas pode estar incompleta ou desatualizada. Se não encontrar a organização aqui, **não conclua que ela não existe** — use `movidesk_search_organizations` (abaixo) antes de informar ao usuário que não achou.
+- `list_known_services(query, limit)` → catálogo LOCAL sincronizado de serviços (`{id, servico, nome, descricao, ativo}`). Use ANTES de `movidesk_search_services` para resolver o nome/id de um serviço — ver seção "Serviços, categoria e equipe" para como usar `nome` no filtro `serviceFull` de busca de chamados.
 - `get_flow_config(flow_name)` → IDs e valores aprovados para o fluxo.
 - `audit_log(event)` → registro estruturado sem segredos.
 - `idempotency_get(key)` e `idempotency_put(key, result)`.
@@ -205,14 +206,24 @@ $filter=serviceFull/any(s: s eq 'Nome do Serviço')
 filtro acima é confirmado (`any` com igualdade exata `eq`, seguindo o mesmo padrão já
 confirmado para `clients/any(...)`). Passos:
 
-1. Resolva o nome exato do serviço primeiro (`movidesk_get_service`/`movidesk_search_services`).
-   Pode haver múltiplos serviços com nomes iguais/parecidos e IDs diferentes (ex:
-   "Construshow" cadastrado 5 vezes com IDs distintos) — confirme com o usuário qual, ou
-   se a intenção é buscar por todos os nomes iguais, use `s eq 'Nome'` mesmo assim (o
-   filtro é pelo texto do serviceFull no ticket, não pelo ID escolhido).
-2. Combine com outros filtros via `and` (organização, data, status) do mesmo jeito que os
+1. Resolva o serviço primeiro com `list_known_services` (catálogo local — use ANTES de
+   `movidesk_search_services`). A mesma folha pode existir sob várias hierarquias com IDs
+   diferentes (ex: "Construshow" existe 8 vezes: nível topo e sob GCC, HOK Cursos, Oracle
+   Cloud, Migração, Implantação, Paralisações, Personalizações). Use o campo `nome`
+   (a folha, ex: `Construshow`) como o `'Nome do Serviço'` do filtro acima — é o texto que
+   aparece dentro do array `serviceFull` de cada ticket, então esse filtro pega tickets de
+   TODAS as hierarquias que compartilham essa folha (geralmente é isso que o usuário quer
+   ao pedir "chamados do serviço X"). Use o campo `servico` (trilha completa, ex: "GCC »
+   Construshow") só para apresentar ao usuário/confirmar qual hierarquia ele tinha em
+   mente, não como valor do filtro.
+2. Se `list_known_services` não achar nada (o catálogo cobre só o que estava ativo no
+   momento da última sincronização), caia para `movidesk_search_services` contra a API.
+3. Combine com outros filtros via `and` (organização, data, status) do mesmo jeito que os
    outros exemplos desta seção.
-3. Se o texto do serviço tiver aspas simples, escape dobrando (`odataEscape`/seção 5).
+4. Se o texto do serviço tiver aspas simples, escape dobrando (`odataEscape`/seção 5).
+5. Se o usuário quiser chamados de uma hierarquia específica (ex: só "GCC » Construshow",
+   não as outras 7 variações), ainda não há filtro confirmado para isso neste tenant —
+   trate como diagnóstico (seção 9) em vez de inventar uma combinação de filtro.
 
 ### Tickets e ações
 

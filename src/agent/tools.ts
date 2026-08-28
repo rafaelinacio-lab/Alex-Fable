@@ -15,6 +15,7 @@
 import { z } from "zod";
 import { getFlowConfig, TENANT_FLOWS, type FlowName } from "../config/tenant.js";
 import { findContactByEmail, listOrganizations } from "../local/contacts.js";
+import { searchKnownServices } from "../local/serviceCatalog.js";
 import { searchAdUsers } from "../local/directory.js";
 import {
   getTicket,
@@ -56,6 +57,10 @@ const schemas = {
   movidesk_search_organizations: z.object({
     query: z.string().min(1),
     top: z.number().int().positive().max(50).default(20),
+  }),
+  list_known_services: z.object({
+    query: z.string().default(""),
+    limit: z.number().int().positive().max(50).default(10),
   }),
   get_flow_config: z.object({ flow_name: z.enum(FLOW_NAMES) }),
 
@@ -152,6 +157,8 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
     "Busca organizações na lista LOCAL sincronizada (fonte preferencial para fluxos com catálogo confirmado, ex: Voors, GCC). Se não encontrar nada (lista local vazia/desatualizada ou organização não coberta por esses fluxos), use movidesk_search_organizations para buscar direto na API real do Movidesk antes de dizer que a organização não existe.",
   movidesk_search_organizations:
     "Busca organizações direto na API real do Movidesk por nome/razão social (contains em businessName). Use como fallback quando list_customer_organizations não encontrar a organização. Retorna id (cod_ref), businessName, personType, profileType — confira esses campos para confirmar que é de fato uma organização antes de usar o id para filtrar chamados.",
+  list_known_services:
+    "Busca no catálogo LOCAL sincronizado de serviços (id, nome, e 'servico' = trilha hierárquica completa, ex: 'GCC » Construshow'). USE ISTO PRIMEIRO para resolver um serviço, antes de movidesk_search_services — a mesma folha pode existir sob várias hierarquias com IDs diferentes (ex: 'Construshow' aparece 8 vezes: top-level e sob GCC, HOK Cursos, Oracle Cloud, Migração, etc.). Para montar o filtro de chamados serviceFull/any(s: s eq '...'), use o campo 'nome' (a folha, ex: 'Construshow') — é o texto que aparece dentro do array serviceFull de cada ticket. Use 'servico' (a trilha completa) só para APRESENTAR ao usuário/confirmar qual hierarquia ele quer, já que o filtro por 'nome' sozinho pega tickets de todas as hierarquias com essa folha (geralmente é isso que o usuário quer ao pedir 'chamados do serviço X'; se ele quiser só uma hierarquia específica, isso ainda não tem filtro confirmado — trate como seção 9, diagnóstico).",
   get_flow_config:
     "Retorna a configuração validada de um fluxo (serviço, equipe, formulário, campos adicionais, notas de comportamento confirmado). SEMPRE use esta ferramenta em vez de lembrar IDs de memória.",
   movidesk_get_ticket: "Busca um chamado Movidesk por ID.",
@@ -261,6 +268,9 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
 
     case "movidesk_search_organizations":
       return searchOrganizationsByName(input.query, input.top);
+
+    case "list_known_services":
+      return searchKnownServices(input.query, input.limit);
 
     case "get_flow_config":
       return getFlowConfig(input.flow_name);

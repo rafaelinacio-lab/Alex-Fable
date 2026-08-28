@@ -54,6 +54,11 @@ const TOOL_PARAMETERS: Record<ToolName, Record<string, unknown>> = {
     required: ["query"],
     additionalProperties: false,
   },
+  list_known_services: {
+    type: "object",
+    properties: { query: { type: "string" }, limit: { type: "integer" } },
+    additionalProperties: false,
+  },
   get_flow_config: {
     type: "object",
     properties: {

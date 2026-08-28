@@ -8,6 +8,7 @@ import { RateLimiter } from "../src/store/rateLimiter.js";
 import { getFlowConfig } from "../src/config/tenant.js";
 import { exportRowsToExcel } from "../src/local/export.js";
 import { loadEnv } from "../src/config/loadEnv.js";
+import { searchKnownServices, getKnownServiceById } from "../src/local/serviceCatalog.js";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -161,4 +162,17 @@ test("loadEnv lê .env salvo com BOM (UTF-8 com marca de ordem de bytes, comum n
     delete process.env.OUTRA;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("catálogo local de serviços resolve nome -> hierarquias e id -> serviço", async () => {
+  const matches = await searchKnownServices("construshow");
+  assert.ok(matches.length >= 5, `esperava várias hierarquias de Construshow, achou ${matches.length}`);
+  assert.ok(matches.some((s) => s.servico === "Construshow" && s.id === 131281));
+  assert.ok(matches.every((s) => s.nome === "Construshow"));
+
+  const byId = await getKnownServiceById(216138);
+  assert.equal(byId?.servico, "Sistemas Internos");
+
+  const notFound = await getKnownServiceById(999999999);
+  assert.equal(notFound, null);
 });

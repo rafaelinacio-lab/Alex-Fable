@@ -68,7 +68,20 @@ Ao rodar `npm run dev`, o terminal imprime a URL do painel (padrão
 
 Para testar sem depender de AD/Movidesk reais, copie os arquivos `*.example.json` em
 `data/local/` para os nomes usados pelo `.env` (`movidesk_contatos.json`,
-`organizacoes.json`, `ad_users.json`).
+`organizacoes.json`, `ad_users.json`). O catálogo de serviços (`data/local/servicos.json`)
+já vem com dados reais — não é um `.example.json` (ver seção abaixo).
+
+## Catálogo de serviços (resolve ambiguidade de nome)
+
+`data/local/servicos.json` é o catálogo de serviços do Movidesk (exportado de
+Configurações > Serviços), usado pela ferramenta `list_known_services`. Existe porque
+buscar serviço por nome direto na API é ambíguo neste tenant: a mesma folha pode existir
+sob várias hierarquias com IDs diferentes (ex: "Construshow" aparece 8 vezes — nível
+topo, e sob GCC, HOK Cursos, Oracle Cloud, Migração, Implantação, Paralisações,
+Personalizações). O agente usa esse catálogo para resolver `nome`/`servico` antes de
+montar o filtro `serviceFull` (ver seção "Serviços, categoria e equipe" do prompt de
+sistema). Se a exportação do Movidesk mudar, gere um novo `servicos.json` com as colunas
+`id, servico, nome, descricao, disponivelParaTickets, ativo` e substitua o arquivo.
 
 ## Contagens exatas e exportação para Excel
 
