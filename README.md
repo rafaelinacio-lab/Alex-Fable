@@ -84,10 +84,15 @@ isso sozinho a partir de buscas soltas:
   em volumes grandes, por causa do rate limit de 10 req/min) — o prompt também instrui o
   agente a não interromper essa busca pedindo confirmação a cada lote de 100, nem cair de
   volta em paginação manual conversando sobre cada página.
-- **"Me dá um Excel/planilha/CSV"** → o agente usa `export_tickets_to_excel`, que grava
-  um `.xlsx` de verdade em `EXPORTS_DIR` (padrão `./exports`, veja `.env.example`) e
-  devolve o caminho — não uma tabela colada como texto no chat. Como o agente roda como
-  processo local na sua máquina, o arquivo fica ali mesmo, pronto pra abrir.
+- **"Me dá um Excel/planilha/CSV"** → o agente usa `export_tickets_search_to_excel`, que
+  faz a busca exaustiva E grava o `.xlsx` de verdade em `EXPORTS_DIR` (padrão `./exports`,
+  veja `.env.example`) **inteiramente no servidor, numa única chamada de ferramenta** —
+  os registros nunca precisam passar pelo modelo como texto. Isso corrige um bug real: a
+  versão anterior (`export_tickets_to_excel` com `rows` vindas do modelo) exigia que o
+  modelo retransmitisse cada linha como argumento, o que truncava silenciosamente em
+  volumes grandes (um pedido de 643 chamados virava um arquivo com só 20, depois 500).
+  `export_tickets_to_excel` continua existindo só para linhas pequenas (até 200) que o
+  modelo já tem prontas na conversa — nunca para exportar o resultado de uma busca.
 
 ## Segurança e operação
 

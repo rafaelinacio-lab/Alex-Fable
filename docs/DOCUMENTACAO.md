@@ -112,7 +112,9 @@ Especificação completa na seção 4 do prompt de sistema. Categorias:
   `movidesk_get_service`, `movidesk_search_services`.
 - **Mutação Movidesk**: `movidesk_create_ticket` (exige `idempotency_key`),
   `movidesk_patch_ticket`.
-- **Saída**: `export_tickets_to_excel`.
+- **Saída**: `export_tickets_search_to_excel` (busca + exportação em uma chamada,
+  server-side — usar sempre que envolver o resultado de uma busca), `export_tickets_to_excel`
+  (só para linhas pequenas que o modelo já tem prontas, até 200).
 
 Toda ferramenta tem schema validado (`zod`) em `src/agent/tools.ts` — o modelo nunca
 manda JSON solto direto para a API; o schema rejeita antes.
@@ -164,6 +166,12 @@ Registro do que já foi corrigido, para não reintroduzir os mesmos problemas:
    com sinalização explícita de `exact_total`.
 4. **Sem entrega de arquivo real**: pedidos de "Excel/CSV" resultavam em texto colado no
    chat. Corrigido com `export_tickets_to_excel`, que grava `.xlsx` em disco.
+4b. **Exportação truncando silenciosamente em volumes grandes** (643 chamados viravam
+    arquivos de 20, depois 500): `export_tickets_to_excel` exigia que o modelo
+    retransmitisse cada linha como argumento da chamada de ferramenta — estourava o
+    limite de tokens de saída do modelo antes de completar. Corrigido com
+    `export_tickets_search_to_excel`, que faz a busca exaustiva E grava o arquivo
+    inteiramente no servidor, sem os registros passarem pelo contexto do modelo.
 5. **Filtro OData inventado** (`creation`/`year(...)`): corrigido apontando o campo
    confirmado (`createdDate`, comparação `ge`/`le`) e reforçando que erros 400 devem ser
    diagnosticados com o `errorMessage` literal, não parafraseados.

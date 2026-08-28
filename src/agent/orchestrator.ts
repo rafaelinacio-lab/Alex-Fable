@@ -147,6 +147,27 @@ const TOOL_PARAMETERS: Record<ToolName, Record<string, unknown>> = {
     required: ["rows", "filename_hint"],
     additionalProperties: false,
   },
+  export_tickets_search_to_excel: {
+    type: "object",
+    properties: {
+      filter: { type: "string" },
+      select: { type: "array", items: { type: "string" } },
+      source: { type: "string", enum: ["current", "past"] },
+      page_size: { type: "integer" },
+      max_pages: { type: "integer" },
+      columns: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { header: { type: "string" }, key: { type: "string" } },
+          required: ["header", "key"],
+        },
+      },
+      filename_hint: { type: "string" },
+    },
+    required: ["filter", "select", "filename_hint"],
+    additionalProperties: false,
+  },
   movidesk_create_ticket: {
     type: "object",
     properties: {

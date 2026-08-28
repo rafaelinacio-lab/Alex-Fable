@@ -113,6 +113,33 @@ test("exportRowsToExcel rejeita lista vazia", async () => {
   await assert.rejects(() => exportRowsToExcel([], [{ header: "ID", key: "id" }], "vazio"));
 });
 
+test("exportRowsToExcel grava volume grande (643 linhas) sem truncar — regressão do bug de exportação", async () => {
+  const dir = "./exports-test-large";
+  rmSync(dir, { recursive: true, force: true });
+
+  const rows = Array.from({ length: 643 }, (_, i) => ({
+    id: 890000 + i,
+    subject: `Chamado de teste número ${i}`,
+    status: ["Novo", "Em atendimento", "Aguardando"][i % 3],
+  }));
+  const columns = [
+    { header: "ID", key: "id" },
+    { header: "Assunto", key: "subject" },
+    { header: "Status", key: "status" },
+  ];
+
+  const result = await exportRowsToExcel(rows, columns, "chamados-volume-grande", { dir });
+  assert.equal(result.rowCount, 643);
+
+  const ExcelJS = (await import("exceljs")).default;
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(result.path);
+  const sheet = workbook.worksheets[0];
+  assert.equal(sheet.rowCount, 644); // 643 linhas de dados + 1 de cabeçalho
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test("loadEnv lê .env salvo com BOM (UTF-8 com marca de ordem de bytes, comum no Windows)", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "movidesk-env-test-"));
   const envPath = path.join(dir, ".env");
