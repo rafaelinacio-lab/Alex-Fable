@@ -114,6 +114,11 @@ isso sozinho a partir de buscas soltas:
   volumes grandes (um pedido de 643 chamados virava um arquivo com só 20, depois 500).
   `export_tickets_to_excel` continua existindo só para linhas pequenas (até 200) que o
   modelo já tem prontas na conversa — nunca para exportar o resultado de uma busca.
+- **"Me dá um PDF/relatório"** → mesmo padrão em `export_tickets_search_to_pdf`
+  (`src/local/pdfExport.ts`, via `pdfkit`): tabela paginada automaticamente, gravada
+  inteiramente no servidor. Limite bem menor que o Excel (5.000 linhas) — PDF é para
+  relatório legível, não para descarregar bases inteiras; acima disso o agente é
+  instruído a usar Excel e explicar o motivo.
 
 ## Segurança e operação
 

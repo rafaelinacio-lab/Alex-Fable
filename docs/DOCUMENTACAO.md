@@ -74,7 +74,7 @@ Só o módulo `src/movidesk/client.ts` lê `MOVIDESK_TOKEN` do ambiente.
 | `src/config/checkEnv.ts` | Diagnóstico de configuração (`npm run check-env`) |
 | `src/movidesk/client.ts` | Cliente HTTP — único lugar que lê o token; rate limit, retry/backoff |
 | `src/movidesk/{tickets,persons,services}.ts` | Operações tipadas por recurso |
-| `src/local/{contacts,directory,export,serviceCatalog}.ts` | Diretório local de contatos/organizações, busca AD, exportação Excel, catálogo de serviços |
+| `src/local/{contacts,directory,export,pdfExport,serviceCatalog}.ts` | Diretório local de contatos/organizações, busca AD, exportação Excel/PDF, catálogo de serviços |
 | `src/store/{audit,idempotency,rateLimiter}.ts` | Auditoria, idempotência de criação, limitador de requisições |
 | `src/agent/tools.ts` | Contrato de ferramentas — schemas zod + dispatch, único ponto de contato com o modelo |
 | `src/agent/orchestrator.ts` | Loop de function-calling com a API da OpenAI |
@@ -112,9 +112,10 @@ Especificação completa na seção 4 do prompt de sistema. Categorias:
   `movidesk_get_service`, `movidesk_search_services`.
 - **Mutação Movidesk**: `movidesk_create_ticket` (exige `idempotency_key`),
   `movidesk_patch_ticket`.
-- **Saída**: `export_tickets_search_to_excel` (busca + exportação em uma chamada,
-  server-side — usar sempre que envolver o resultado de uma busca), `export_tickets_to_excel`
-  (só para linhas pequenas que o modelo já tem prontas, até 200).
+- **Saída**: `export_tickets_search_to_excel`/`export_tickets_search_to_pdf` (busca +
+  exportação em uma chamada, server-side — usar sempre que envolver o resultado de uma
+  busca), `export_tickets_to_excel`/`export_tickets_to_pdf` (só para linhas pequenas que
+  o modelo já tem prontas, até 200). PDF tem limite bem menor (5.000 linhas) que Excel.
 
 Toda ferramenta tem schema validado (`zod`) em `src/agent/tools.ts` — o modelo nunca
 manda JSON solto direto para a API; o schema rejeita antes.
@@ -218,6 +219,13 @@ Registro do que já foi corrigido, para não reintroduzir os mesmos problemas:
     ser deprioritizada pelo modelo. Reforçado explicitamente: esse fluxo de consulta é só
     leitura, nunca dispara `movidesk_create_ticket`/`movidesk_patch_ticket` por conta
     própria.
+13. **Exportação para PDF** (`src/local/pdfExport.ts`, via `pdfkit`): mesmo padrão já
+    estabelecido para Excel — `export_tickets_search_to_pdf` busca e grava o arquivo
+    inteiramente no servidor numa única chamada (nunca passa pelos tokens do modelo,
+    evitando o mesmo bug de truncamento já corrigido no Excel); `export_tickets_to_pdf`
+    existe só para linhas pequenas (até 200) já prontas na conversa. Limite de 5.000
+    linhas (bem menor que o Excel) porque PDF é para relatório legível, não para
+    descarregar bases inteiras.
 
 ## 9. Limitações conhecidas
 

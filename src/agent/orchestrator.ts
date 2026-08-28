@@ -175,6 +175,47 @@ const TOOL_PARAMETERS: Record<ToolName, Record<string, unknown>> = {
     required: ["filter", "select", "filename_hint"],
     additionalProperties: false,
   },
+  export_tickets_to_pdf: {
+    type: "object",
+    properties: {
+      rows: { type: "array", items: { type: "object" } },
+      columns: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { header: { type: "string" }, key: { type: "string" }, width: { type: "number" } },
+          required: ["header", "key"],
+        },
+      },
+      filename_hint: { type: "string" },
+      title: { type: "string" },
+    },
+    required: ["rows", "filename_hint"],
+    additionalProperties: false,
+  },
+  export_tickets_search_to_pdf: {
+    type: "object",
+    properties: {
+      filter: { type: "string" },
+      select: { type: "array", items: { type: "string" } },
+      source: { type: "string", enum: ["current", "past"] },
+      page_size: { type: "integer" },
+      max_pages: { type: "integer" },
+      only_open: { type: "boolean" },
+      columns: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { header: { type: "string" }, key: { type: "string" }, width: { type: "number" } },
+          required: ["header", "key"],
+        },
+      },
+      filename_hint: { type: "string" },
+      title: { type: "string" },
+    },
+    required: ["filter", "select", "filename_hint"],
+    additionalProperties: false,
+  },
   movidesk_create_ticket: {
     type: "object",
     properties: {

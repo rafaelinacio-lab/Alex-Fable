@@ -34,6 +34,7 @@ import { recordAuditEvent, hashPayload, newCorrelationId } from "../store/audit.
 import { idempotencyGet, idempotencyPut, idempotencyReserve } from "../store/idempotency.js";
 import { emitEvent, newEventId, sanitizeForDashboard } from "../observability/eventBus.js";
 import { exportRowsToExcel } from "../local/export.js";
+import { exportRowsToPdf, PDF_MAX_ROWS } from "../local/pdfExport.js";
 
 export interface AgentContext {
   conversationId: string;
@@ -116,6 +117,23 @@ const schemas = {
     columns: z.array(z.object({ header: z.string(), key: z.string() })).optional(),
     filename_hint: z.string().min(1),
   }),
+  export_tickets_to_pdf: z.object({
+    rows: z.array(z.record(z.string(), z.unknown())).min(1).max(200),
+    columns: z.array(z.object({ header: z.string(), key: z.string(), width: z.number().positive().optional() })).optional(),
+    filename_hint: z.string().min(1),
+    title: z.string().optional(),
+  }),
+  export_tickets_search_to_pdf: z.object({
+    filter: z.string(),
+    select: z.array(z.string()).min(1),
+    source: z.enum(["current", "past"]).default("current"),
+    page_size: z.number().int().positive().max(100).default(100),
+    max_pages: z.number().int().positive().max(150).default(50),
+    only_open: z.boolean().default(false),
+    columns: z.array(z.object({ header: z.string(), key: z.string(), width: z.number().positive().optional() })).optional(),
+    filename_hint: z.string().min(1),
+    title: z.string().optional(),
+  }),
   movidesk_create_ticket: z.object({
     idempotency_key: z.string().min(1),
     payload: z.record(z.string(), z.unknown()),
@@ -177,6 +195,10 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
     "Grava um .xlsx a partir de linhas que VOCÊ já tem em mãos (até 200 linhas — ex: um resultado pequeno que você já resumiu na conversa). NUNCA use isto para exportar o resultado de uma busca grande: você teria que retransmitir cada registro como texto na chamada de ferramenta, e isso trunca silenciosamente antes de completar (é exatamente o bug já visto: só saíam 20-500 de 643 linhas). Para exportar o resultado de uma busca — que é o caso mais comum — use export_tickets_search_to_excel, que busca e grava o arquivo inteiro no servidor, sem os dados passarem por você.",
   export_tickets_search_to_excel:
     "**Ferramenta certa para 'me dá um Excel/planilha desses chamados'.** Faz a busca exaustiva (como movidesk_search_tickets_exhaustive) E grava o .xlsx em uma única chamada de ferramenta — os registros nunca precisam ser retransmitidos por você, então não há risco de truncar o arquivo. Devolve o caminho do arquivo, o total de linhas gravadas, e se a contagem é exata. Use com o MESMO filter/select que você usaria em movidesk_search_tickets_exhaustive, incluindo only_open:true quando o pedido for 'chamados em aberto' (ver descrição de movidesk_search_tickets_exhaustive — não tente filtrar status via OData ne/not).",
+  export_tickets_to_pdf:
+    "Grava um .pdf (tabela simples, paginada) a partir de linhas que VOCÊ já tem em mãos (até 200 linhas). Mesma ressalva de export_tickets_to_excel: NUNCA use para exportar o resultado de uma busca grande — os dados teriam que ser retransmitidos por você e isso trunca silenciosamente. Para exportar o resultado de uma busca, use export_tickets_search_to_pdf.",
+  export_tickets_search_to_pdf:
+    "**Ferramenta certa para 'me dá um PDF desses chamados'.** Faz a busca exaustiva E grava o .pdf (tabela paginada automaticamente) em uma única chamada de ferramenta — os registros nunca passam por você. Devolve o caminho do arquivo e o total de linhas. Use com o MESMO filter/select/only_open que usaria em movidesk_search_tickets_exhaustive. Limite bem menor que o Excel (5.000 linhas) — PDF é para relatório legível, não para descarregar bases inteiras; se o volume for muito grande, prefira export_tickets_search_to_excel e diga isso ao usuário.",
   movidesk_create_ticket:
     "Cria um chamado Movidesk. Exige idempotency_key (gerada previamente). Só cria de fato se a chave ainda não tiver um resultado bem-sucedido.",
   movidesk_patch_ticket:
@@ -368,6 +390,49 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
           (result.hitCap
             ? `O arquivo contém ${exportResult.rowCount} chamados — atingiu o limite de segurança de ${input.max_pages} páginas, pode haver mais. Chame esta mesma ferramenta de novo com max_pages maior (até 150) se precisar de todos.`
             : `O arquivo contém todos os ${exportResult.rowCount} chamados encontrados (contagem exata — a API do Movidesk não suporta $count, mas a última página veio incompleta, confirmando o fim dos resultados).`) +
+          (input.only_open && result.fetchedBeforeOpenFilter !== undefined
+            ? ` Filtro only_open aplicado: de ${result.fetchedBeforeOpenFilter} chamados retornados pela busca, ${exportResult.rowCount} estavam em aberto.`
+            : ""),
+      };
+    }
+
+    case "export_tickets_to_pdf": {
+      const columns = input.columns ?? Object.keys(input.rows[0]).map((key: string) => ({ header: key, key }));
+      return exportRowsToPdf(input.rows, columns, input.filename_hint, { title: input.title });
+    }
+
+    case "export_tickets_search_to_pdf": {
+      const result = await searchTicketsExhaustive(
+        { filter: input.filter, select: input.select },
+        { pageSize: input.page_size, maxPages: input.max_pages, source: input.source, onlyOpen: input.only_open },
+      );
+      if (result.tickets.length === 0) {
+        return {
+          path: null,
+          rowCount: 0,
+          exact_total: !result.hitCap,
+          note: input.only_open
+            ? `Nenhum chamado em aberto encontrado (de ${result.fetchedBeforeOpenFilter ?? 0} retornados pela busca) — nada para exportar.`
+            : "Nenhum chamado encontrado — nada para exportar.",
+        };
+      }
+      if (result.tickets.length > PDF_MAX_ROWS) {
+        return {
+          path: null,
+          rowCount: 0,
+          exact_total: !result.hitCap,
+          note: `A busca encontrou ${result.tickets.length} chamados, acima do limite de ${PDF_MAX_ROWS} para PDF (que é pensado para relatórios legíveis, não para descarregar bases inteiras). Use export_tickets_search_to_excel para este volume, ou refine o filtro (período/status/organização) para reduzir o total.`,
+        };
+      }
+      const columns = input.columns ?? input.select.map((key: string) => ({ header: key, key }));
+      const exportResult = await exportRowsToPdf(result.tickets, columns, input.filename_hint, { title: input.title });
+      return {
+        ...exportResult,
+        exact_total: !result.hitCap,
+        note:
+          (result.hitCap
+            ? `O arquivo contém ${exportResult.rowCount} chamados — atingiu o limite de segurança de ${input.max_pages} páginas, pode haver mais. Chame esta mesma ferramenta de novo com max_pages maior (até 150) se precisar de todos.`
+            : `O arquivo contém todos os ${exportResult.rowCount} chamados encontrados (contagem exata — a última página veio incompleta, confirmando o fim dos resultados).`) +
           (input.only_open && result.fetchedBeforeOpenFilter !== undefined
             ? ` Filtro only_open aplicado: de ${result.fetchedBeforeOpenFilter} chamados retornados pela busca, ${exportResult.rowCount} estavam em aberto.`
             : ""),

@@ -9,6 +9,7 @@ import { buildIdempotencyKey, idempotencyReserve, idempotencyPut, idempotencyGet
 import { RateLimiter } from "../src/store/rateLimiter.js";
 import { getFlowConfig } from "../src/config/tenant.js";
 import { exportRowsToExcel } from "../src/local/export.js";
+import { exportRowsToPdf } from "../src/local/pdfExport.js";
 import { loadEnv } from "../src/config/loadEnv.js";
 import { searchKnownServices, getKnownServiceById } from "../src/local/serviceCatalog.js";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -259,4 +260,36 @@ test("searchTicketsExhaustive com onlyOpen filtra baseStatus corretamente — re
   } finally {
     global.fetch = originalFetch;
   }
+});
+
+test("exportRowsToPdf grava um .pdf real, multi-página, e rejeita lista vazia", async () => {
+  const dir = "./exports-test-pdf";
+  rmSync(dir, { recursive: true, force: true });
+
+  const rows = Array.from({ length: 250 }, (_, i) => ({
+    id: 890000 + i,
+    subject: `Chamado ção ${i}`,
+    status: "Novo",
+  }));
+  const columns = [
+    { header: "ID", key: "id" },
+    { header: "Assunto", key: "subject" },
+    { header: "Status", key: "status" },
+  ];
+
+  const result = await exportRowsToPdf(rows, columns, "teste-pdf", { dir, title: "Relatório de Teste" });
+  assert.equal(result.rowCount, 250);
+  assert.ok(result.path.endsWith(".pdf"));
+
+  const { readFileSync, existsSync } = await import("node:fs");
+  assert.ok(existsSync(result.path));
+  const bytes = readFileSync(result.path);
+  assert.equal(bytes.subarray(0, 5).toString("ascii"), "%PDF-");
+  // Mais de uma página confirma que a paginação automática funcionou para 250 linhas.
+  const pageMarkers = bytes.toString("latin1").match(/\/Type\s*\/Page[^s]/g) ?? [];
+  assert.ok(pageMarkers.length > 1, `esperava múltiplas páginas, achou ${pageMarkers.length}`);
+
+  await assert.rejects(() => exportRowsToPdf([], columns, "vazio", { dir }));
+
+  rmSync(dir, { recursive: true, force: true });
 });
