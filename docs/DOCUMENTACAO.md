@@ -226,6 +226,13 @@ Registro do que já foi corrigido, para não reintroduzir os mesmos problemas:
     existe só para linhas pequenas (até 200) já prontas na conversa. Limite de 5.000
     linhas (bem menor que o Excel) porque PDF é para relatório legível, não para
     descarregar bases inteiras.
+14. **Download de arquivos pelo navegador**: os quatro export tools emitem um evento
+    `file_ready` (`src/observability/eventBus.ts`) assim que gravam um arquivo. O painel
+    (`src/server/dashboard.ts`) escuta esse evento e injeta um cartão de download na aba
+    Conversa (independente do texto que o modelo escrever), e serve o arquivo via
+    `GET /exports/:filename` (sempre `path.basename()` do nome pedido — nunca sai de
+    `EXPORTS_DIR`, mesmo com tentativa de path traversal). `DashboardHandle` ganhou um
+    método `close()` para encerrar o servidor de forma limpa (usado pelos testes).
 
 ## 9. Limitações conhecidas
 

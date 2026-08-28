@@ -12,6 +12,8 @@ import { exportRowsToExcel } from "../src/local/export.js";
 import { exportRowsToPdf } from "../src/local/pdfExport.js";
 import { loadEnv } from "../src/config/loadEnv.js";
 import { searchKnownServices, getKnownServiceById } from "../src/local/serviceCatalog.js";
+import { startDashboardServer } from "../src/server/dashboard.js";
+import { emitEvent, newEventId } from "../src/observability/eventBus.js";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -292,4 +294,63 @@ test("exportRowsToPdf grava um .pdf real, multi-página, e rejeita lista vazia",
   await assert.rejects(() => exportRowsToPdf([], columns, "vazio", { dir }));
 
   rmSync(dir, { recursive: true, force: true });
+});
+
+test("painel serve arquivos gerados para download e bloqueia path traversal", async () => {
+  const dir = "./exports-test-download";
+  rmSync(dir, { recursive: true, force: true });
+
+  const result = await exportRowsToExcel(
+    [{ id: 1, subject: "Teste", status: "Novo" }],
+    [
+      { header: "ID", key: "id" },
+      { header: "Assunto", key: "subject" },
+      { header: "Status", key: "status" },
+    ],
+    "teste-download",
+    { dir },
+  );
+
+  const fakeSession = { async send(text: string) { return "ok: " + text; } } as any;
+  const dashboard = startDashboardServer(fakeSession, 4595);
+
+  try {
+    const ws = new (await import("ws")).default("ws://localhost:4595/chat");
+    await new Promise<void>((resolve, reject) => {
+      ws.on("open", () => resolve());
+      ws.on("error", reject);
+    });
+    const received: unknown[] = [];
+    ws.on("message", (raw: Buffer) => received.push(JSON.parse(raw.toString())));
+
+    const filename = path.basename(result.path);
+    const downloadUrl = "/exports/" + encodeURIComponent(filename);
+    emitEvent({
+      kind: "file_ready",
+      id: newEventId(),
+      timestamp: new Date().toISOString(),
+      filename,
+      downloadUrl,
+      rowCount: result.rowCount,
+      format: "xlsx",
+    });
+    await new Promise((r) => setTimeout(r, 150));
+
+    const fileMsg = (received as any[]).find((m) => m.type === "chat_message" && m.message.role === "file");
+    assert.ok(fileMsg, "esperava um chat_message com role file");
+    assert.equal(fileMsg.message.file.downloadUrl, downloadUrl);
+    ws.close();
+
+    // O servidor serve de DEFAULT_EXPORTS_DIR (padrão ./exports), não do `dir` do teste —
+    // então aqui só confirmamos que a rota nega path traversal, sem depender de onde o
+    // arquivo real do teste foi gravado.
+    const evil = await fetch(dashboard.url + "/exports/" + encodeURIComponent("../../etc/passwd"));
+    assert.equal(evil.status, 404);
+
+    const missing = await fetch(dashboard.url + "/exports/nao-existe.xlsx");
+    assert.equal(missing.status, 404);
+  } finally {
+    await dashboard.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

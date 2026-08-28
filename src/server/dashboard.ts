@@ -13,15 +13,22 @@
  */
 
 import { createServer } from "node:http";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import { agentEventBus, type AgentEvent } from "../observability/eventBus.js";
 import type { MovideskAgentSession } from "../agent/orchestrator.js";
+import { DEFAULT_EXPORTS_DIR } from "../local/exportsDir.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DASHBOARD_HTML_PATH = path.join(__dirname, "..", "..", "public", "dashboard.html");
+
+const CONTENT_TYPES: Record<string, string> = {
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".pdf": "application/pdf",
+};
 
 const EVENT_HISTORY_LIMIT = 500;
 const eventHistory: AgentEvent[] = [];
@@ -33,10 +40,12 @@ agentEventBus.on("event", (event: AgentEvent) => {
 
 export interface ChatMessage {
   id: string;
-  role: "user" | "assistant" | "error";
+  role: "user" | "assistant" | "error" | "file";
   text: string;
   timestamp: string;
-  source: "web" | "terminal";
+  source: "web" | "terminal" | "system";
+  /** Presente só quando role === "file" — ver AgentEvent "file_ready". */
+  file?: { filename: string; downloadUrl: string; rowCount: number; format: "xlsx" | "pdf" };
 }
 
 const CHAT_HISTORY_LIMIT = 200;
@@ -49,6 +58,8 @@ export interface DashboardHandle {
    * para todas as abas de conversa conectadas. Use isto no lugar de `session.send()` diretamente
    * sempre que a mensagem também deve aparecer no painel web (ex: o REPL de terminal). */
   sendChatMessage(text: string, source: ChatMessage["source"]): Promise<string>;
+  /** Encerra o servidor HTTP e os WebSockets — usado em testes; o CLI normalmente deixa rodando. */
+  close(): Promise<void>;
 }
 
 export function startDashboardServer(
@@ -68,6 +79,39 @@ export function startDashboardServer(
         });
       return;
     }
+
+    if (req.url?.startsWith("/exports/")) {
+      // path.basename() descarta qualquer diretório embutido no nome — nunca serve nada
+      // fora de DEFAULT_EXPORTS_DIR, mesmo que o navegador mande "../../etc/passwd" etc.
+      const requested = decodeURIComponent(req.url.slice("/exports/".length));
+      const filename = path.basename(requested);
+      const filePath = path.join(DEFAULT_EXPORTS_DIR, filename);
+      const ext = path.extname(filename).toLowerCase();
+      const contentType = CONTENT_TYPES[ext];
+
+      if (!contentType) {
+        res.writeHead(404);
+        res.end("not found");
+        return;
+      }
+
+      stat(filePath)
+        .then((stats) => {
+          if (!stats.isFile()) throw new Error("not a file");
+          res.writeHead(200, {
+            "Content-Type": contentType,
+            "Content-Length": stats.size,
+            "Content-Disposition": `attachment; filename="${filename}"`,
+          });
+          createReadStream(filePath).pipe(res);
+        })
+        .catch(() => {
+          res.writeHead(404);
+          res.end("arquivo não encontrado (pode ter sido removido)");
+        });
+      return;
+    }
+
     res.writeHead(404);
     res.end("not found");
   });
@@ -119,6 +163,25 @@ export function startDashboardServer(
     return full;
   }
 
+  // Assim que um export (Excel/PDF) termina, mostra um cartão de download na aba
+  // Conversa — independe de como o modelo descrever o resultado em texto.
+  function onFileReady(event: AgentEvent): void {
+    if (event.kind !== "file_ready") return;
+    pushChat({
+      role: "file",
+      text: `Arquivo pronto: ${event.filename}`,
+      timestamp: event.timestamp,
+      source: "system",
+      file: {
+        filename: event.filename,
+        downloadUrl: event.downloadUrl,
+        rowCount: event.rowCount,
+        format: event.format,
+      },
+    });
+  }
+  agentEventBus.on("event", onFileReady);
+
   async function sendChatMessage(text: string, source: ChatMessage["source"]): Promise<string> {
     pushChat({ role: "user", text, timestamp: new Date().toISOString(), source });
     try {
@@ -158,5 +221,15 @@ export function startDashboardServer(
   });
 
   server.listen(port);
-  return { url: `http://localhost:${port}`, sendChatMessage };
+
+  async function close(): Promise<void> {
+    agentEventBus.off("event", onFileReady);
+    for (const client of chatClients) client.terminate();
+    eventsWss.clients.forEach((client) => client.terminate());
+    await new Promise<void>((resolve) => eventsWss.close(() => resolve()));
+    await new Promise<void>((resolve) => chatWss.close(() => resolve()));
+    await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+  }
+
+  return { url: `http://localhost:${port}`, sendChatMessage, close };
 }

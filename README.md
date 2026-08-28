@@ -64,7 +64,10 @@ Ao rodar `npm run dev`, o terminal imprime a URL do painel (padrão
   `src/server/dashboard.ts`). Terminal e navegador falam com a **mesma sessão** do
   agente — a mesma conversa, o mesmo histórico, o mesmo contador de rate limit — então
   dá pra alternar entre os dois sem perder contexto. Se você abrir várias abas do
-  painel, todas veem as mesmas mensagens em tempo real.
+  painel, todas veem as mesmas mensagens em tempo real. Assim que um Excel/PDF é gerado,
+  aparece um cartão de download direto na conversa (📊/📄 + botão "Baixar") — o arquivo é
+  servido pelo próprio painel em `/exports/<nome-do-arquivo>`, então funciona mesmo que
+  você não tenha acesso direto ao disco onde o agente está rodando.
 
 Para testar sem depender de AD/Movidesk reais, copie os arquivos `*.example.json` em
 `data/local/` para os nomes usados pelo `.env` (`movidesk_contatos.json`,

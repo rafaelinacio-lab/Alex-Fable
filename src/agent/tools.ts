@@ -35,6 +35,7 @@ import { idempotencyGet, idempotencyPut, idempotencyReserve } from "../store/ide
 import { emitEvent, newEventId, sanitizeForDashboard } from "../observability/eventBus.js";
 import { exportRowsToExcel } from "../local/export.js";
 import { exportRowsToPdf, PDF_MAX_ROWS } from "../local/pdfExport.js";
+import path from "node:path";
 
 export interface AgentContext {
   conversationId: string;
@@ -232,6 +233,25 @@ async function audit(
 }
 
 /**
+ * Publica um evento "file_ready" para o painel web assim que um export (Excel/PDF) é
+ * gravado com sucesso — a aba Conversa mostra um cartão de download imediatamente,
+ * independente de como o modelo descrever o resultado em texto. Ver
+ * src/server/dashboard.ts (rota GET /exports/:filename que efetivamente serve o arquivo).
+ */
+function announceFileReady(filePath: string, rowCount: number, format: "xlsx" | "pdf"): void {
+  const filename = path.basename(filePath);
+  emitEvent({
+    kind: "file_ready",
+    id: newEventId(),
+    timestamp: new Date().toISOString(),
+    filename,
+    downloadUrl: `/exports/${encodeURIComponent(filename)}`,
+    rowCount,
+    format,
+  });
+}
+
+/**
  * Envolve `dispatchToolInner` para publicar eventos de observabilidade (dashboard):
  * início e fim de cada chamada de ferramenta, com input/output redigidos e truncados
  * por `sanitizeForDashboard` — nunca o payload cru (que pode ter PII completa).
@@ -363,7 +383,9 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
 
     case "export_tickets_to_excel": {
       const columns = input.columns ?? Object.keys(input.rows[0]).map((key: string) => ({ header: key, key }));
-      return exportRowsToExcel(input.rows, columns, input.filename_hint);
+      const result = await exportRowsToExcel(input.rows, columns, input.filename_hint);
+      announceFileReady(result.path, result.rowCount, "xlsx");
+      return { ...result, downloadUrl: `/exports/${encodeURIComponent(path.basename(result.path))}` };
     }
 
     case "export_tickets_search_to_excel": {
@@ -383,8 +405,10 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
       }
       const columns = input.columns ?? input.select.map((key: string) => ({ header: key, key }));
       const exportResult = await exportRowsToExcel(result.tickets, columns, input.filename_hint);
+      announceFileReady(exportResult.path, exportResult.rowCount, "xlsx");
       return {
         ...exportResult,
+        downloadUrl: `/exports/${encodeURIComponent(path.basename(exportResult.path))}`,
         exact_total: !result.hitCap,
         note:
           (result.hitCap
@@ -398,7 +422,9 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
 
     case "export_tickets_to_pdf": {
       const columns = input.columns ?? Object.keys(input.rows[0]).map((key: string) => ({ header: key, key }));
-      return exportRowsToPdf(input.rows, columns, input.filename_hint, { title: input.title });
+      const result = await exportRowsToPdf(input.rows, columns, input.filename_hint, { title: input.title });
+      announceFileReady(result.path, result.rowCount, "pdf");
+      return { ...result, downloadUrl: `/exports/${encodeURIComponent(path.basename(result.path))}` };
     }
 
     case "export_tickets_search_to_pdf": {
@@ -426,8 +452,10 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
       }
       const columns = input.columns ?? input.select.map((key: string) => ({ header: key, key }));
       const exportResult = await exportRowsToPdf(result.tickets, columns, input.filename_hint, { title: input.title });
+      announceFileReady(exportResult.path, exportResult.rowCount, "pdf");
       return {
         ...exportResult,
+        downloadUrl: `/exports/${encodeURIComponent(path.basename(exportResult.path))}`,
         exact_total: !result.hitCap,
         note:
           (result.hitCap

@@ -38,6 +38,17 @@ export type AgentEvent =
       errorMessage?: string;
       /** Presente em 429: segundos até novas requisições serem permitidas. */
       retryAfterSeconds?: number;
+    }
+  | {
+      /** Emitido quando export_tickets_(search_)to_excel/pdf gera um arquivo com sucesso. */
+      kind: "file_ready";
+      id: string;
+      timestamp: string;
+      filename: string;
+      /** Caminho relativo servido pelo painel — ver src/server/dashboard.ts. */
+      downloadUrl: string;
+      rowCount: number;
+      format: "xlsx" | "pdf";
     };
 
 export const agentEventBus = new EventEmitter();

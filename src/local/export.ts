@@ -11,8 +11,8 @@
 import ExcelJS from "exceljs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { DEFAULT_EXPORTS_DIR } from "./exportsDir.js";
 
-const DEFAULT_EXPORTS_DIR = process.env.EXPORTS_DIR ?? "./exports";
 const MAX_ROWS = 50_000; // proteção contra geração descontrolada de arquivos gigantes
 
 export interface ExportColumn {

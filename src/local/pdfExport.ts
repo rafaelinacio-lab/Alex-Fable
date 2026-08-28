@@ -12,8 +12,8 @@ import PDFDocument from "pdfkit";
 import { createWriteStream } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { DEFAULT_EXPORTS_DIR } from "./exportsDir.js";
 
-const DEFAULT_EXPORTS_DIR = process.env.EXPORTS_DIR ?? "./exports";
 // PDF é para relatórios legíveis, não para descarregar bases inteiras — bem menor que o limite do Excel.
 export const PDF_MAX_ROWS = 5_000;
 

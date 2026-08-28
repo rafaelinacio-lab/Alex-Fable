@@ -177,6 +177,34 @@
     border: 1px solid var(--err);
     color: var(--err);
   }
+  .bubble.file {
+    align-self: flex-start;
+    background: var(--panel);
+    border: 1px solid var(--accent);
+    padding: 10px;
+    max-width: 320px;
+  }
+  .file-card { display: flex; align-items: center; gap: 10px; }
+  .file-icon { font-size: 28px; line-height: 1; }
+  .file-info { flex: 1; min-width: 0; }
+  .file-name {
+    font-weight: 600;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .file-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .file-download {
+    background: var(--accent);
+    color: #fff;
+    text-decoration: none;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 12px;
+    border-radius: 8px;
+    white-space: nowrap;
+  }
   .bubble .meta {
     display: block;
     font-size: 10px;
@@ -481,13 +509,30 @@
     }
   }
 
-  function addBubble(role, text, source) {
+  function addBubble(message) {
     const empty = chatLog.querySelector(".empty");
     if (empty) empty.remove();
     const el = document.createElement("div");
-    el.className = "bubble " + role;
-    const meta = role === "user" ? (source === "terminal" ? "via terminal" : "") : "";
-    el.innerHTML = escapeHtml(text) + (meta ? '<span class="meta">' + meta + "</span>" : "");
+
+    if (message.role === "file" && message.file) {
+      el.className = "bubble file";
+      const f = message.file;
+      const icon = f.format === "pdf" ? "📄" : "📊";
+      el.innerHTML =
+        '<div class="file-card">' +
+        '<div class="file-icon">' + icon + "</div>" +
+        '<div class="file-info">' +
+        '<div class="file-name">' + escapeHtml(f.filename) + "</div>" +
+        '<div class="file-meta">' + f.rowCount + " linha(s) · " + f.format.toUpperCase() + "</div>" +
+        "</div>" +
+        '<a class="file-download" href="' + f.downloadUrl + '" download="' + escapeHtml(f.filename) + '">Baixar</a>' +
+        "</div>";
+    } else {
+      el.className = "bubble " + message.role;
+      const meta = message.role === "user" ? (message.source === "terminal" ? "via terminal" : "") : "";
+      el.innerHTML = escapeHtml(message.text) + (meta ? '<span class="meta">' + meta + "</span>" : "");
+    }
+
     chatLog.appendChild(el);
     chatLog.scrollTop = chatLog.scrollHeight;
     return el;
@@ -525,11 +570,11 @@
       const data = JSON.parse(msg.data);
       if (data.type === "chat_history") {
         chatLog.innerHTML = "";
-        for (const m of data.messages) addBubble(m.role, m.text, m.source);
+        for (const m of data.messages) addBubble(m);
         chatEmptyState();
       } else if (data.type === "chat_message") {
-        hideTyping();
-        addBubble(data.message.role, data.message.text, data.message.source);
+        if (data.message.role !== "file") hideTyping();
+        addBubble(data.message);
         if (data.message.role === "user") showTyping();
       }
     };
