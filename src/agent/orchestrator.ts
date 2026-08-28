@@ -131,6 +131,7 @@ const TOOL_PARAMETERS: Record<ToolName, Record<string, unknown>> = {
       source: { type: "string", enum: ["current", "past"] },
       page_size: { type: "integer" },
       max_pages: { type: "integer" },
+      only_open: { type: "boolean" },
     },
     required: ["filter", "select"],
     additionalProperties: false,
@@ -160,6 +161,7 @@ const TOOL_PARAMETERS: Record<ToolName, Record<string, unknown>> = {
       source: { type: "string", enum: ["current", "past"] },
       page_size: { type: "integer" },
       max_pages: { type: "integer" },
+      only_open: { type: "boolean" },
       columns: {
         type: "array",
         items: {

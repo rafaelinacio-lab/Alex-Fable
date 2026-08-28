@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { rmSync } from "node:fs";
 import { odataEscape, buildQueryString, movideskHttp, MovideskApiError } from "../src/movidesk/client.js";
-import { escapeHtml, validateSubject } from "../src/movidesk/tickets.js";
+import { escapeHtml, validateSubject, searchTicketsExhaustive, BASE_STATUS } from "../src/movidesk/tickets.js";
 import { buildIdempotencyKey, idempotencyReserve, idempotencyPut, idempotencyGet } from "../src/store/idempotency.js";
 import { RateLimiter } from "../src/store/rateLimiter.js";
 import { getFlowConfig } from "../src/config/tenant.js";
@@ -223,6 +223,39 @@ test("5xx faz no máximo 1 retry (2 tentativas totais, não 3) e inclui o corpo 
       },
     );
     assert.equal(callCount, 2, "esperava 1 tentativa original + 1 retry, não 3");
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("searchTicketsExhaustive com onlyOpen filtra baseStatus corretamente — regressão do bug 'em aberto trazia Resolvido'", async () => {
+  const originalFetch = global.fetch;
+  const rows = [
+    { id: 1, subject: "A", status: "Novo", baseStatus: BASE_STATUS.NOVO },
+    { id: 2, subject: "B", status: "Resolvido", baseStatus: BASE_STATUS.RESOLVIDO },
+    { id: 3, subject: "C", status: "Em atendimento", baseStatus: BASE_STATUS.EM_ATENDIMENTO },
+    { id: 4, subject: "D", status: "Cancelado", baseStatus: BASE_STATUS.CANCELADO },
+    { id: 5, subject: "E", status: "Fechado", baseStatus: BASE_STATUS.FECHADO },
+    { id: 6, subject: "F", status: "Aguardando", baseStatus: BASE_STATUS.PARADO },
+  ];
+  global.fetch = (async (url: string) => {
+    const skip = Number(new URL(url).searchParams.get("$skip") ?? 0);
+    return new Response(JSON.stringify(skip > 0 ? [] : rows), { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    const result = await searchTicketsExhaustive(
+      { filter: "1 eq 1", select: ["id", "subject", "status"] },
+      { onlyOpen: true },
+    );
+    assert.deepEqual(
+      result.tickets.map((t) => t.id),
+      [1, 3, 6],
+    );
+    assert.equal(result.fetchedBeforeOpenFilter, 6);
+
+    const withoutFilter = await searchTicketsExhaustive({ filter: "1 eq 1", select: ["id", "subject", "status"] });
+    assert.equal(withoutFilter.tickets.length, 6, "sem onlyOpen deve devolver todos, incluindo Resolvido/Cancelado/Fechado");
   } finally {
     global.fetch = originalFetch;
   }

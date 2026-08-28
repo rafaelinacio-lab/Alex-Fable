@@ -99,6 +99,7 @@ const schemas = {
     source: z.enum(["current", "past"]).default("current"),
     page_size: z.number().int().positive().max(100).default(100),
     max_pages: z.number().int().positive().max(150).default(50),
+    only_open: z.boolean().default(false),
   }),
   export_tickets_to_excel: z.object({
     rows: z.array(z.record(z.string(), z.unknown())).min(1).max(200),
@@ -111,6 +112,7 @@ const schemas = {
     source: z.enum(["current", "past"]).default("current"),
     page_size: z.number().int().positive().max(100).default(100),
     max_pages: z.number().int().positive().max(150).default(50),
+    only_open: z.boolean().default(false),
     columns: z.array(z.object({ header: z.string(), key: z.string() })).optional(),
     filename_hint: z.string().min(1),
   }),
@@ -170,11 +172,11 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   movidesk_search_tickets_past:
     "Como movidesk_search_tickets, mas na rota /tickets/past (chamados com lastUpdate há mais de 90 dias). Sintaxe assumida por analogia — não 100% confirmada; se o retorno vier estranho, trate como comportamento não documentado.",
   movidesk_search_tickets_exhaustive:
-    "Pagina AUTOMATICAMENTE até o fim real dos resultados (ou até um limite de segurança) e devolve o total. Use quando o usuário pedir 'todos os chamados' ou uma contagem/quantidade exata SEM pedir exportação — nunca monte esse total manualmente somando chamadas separadas de movidesk_search_tickets. Se o pedido também envolver Excel/planilha, use export_tickets_search_to_excel diretamente em vez desta (evita ter que retransmitir os registros de volta para você). O retorno inclui hitCap/pagesFetched: se hitCap=true, o total pode ser maior que o array devolvido — reporte isso honestamente ao usuário (a API do Movidesk não suporta $count, então não há como saber o total exato além de paginar até o fim).",
+    "Pagina AUTOMATICAMENTE até o fim real dos resultados (ou até um limite de segurança) e devolve o total. Use quando o usuário pedir 'todos os chamados' ou uma contagem/quantidade exata SEM pedir exportação — nunca monte esse total manualmente somando chamadas separadas de movidesk_search_tickets. Se o pedido também envolver Excel/planilha, use export_tickets_search_to_excel diretamente em vez desta (evita ter que retransmitir os registros de volta para você). O retorno inclui hitCap/pagesFetched: se hitCap=true, o total pode ser maior que o array devolvido — reporte isso honestamente ao usuário (a API do Movidesk não suporta $count, então não há como saber o total exato além de paginar até o fim). Para 'chamados em aberto', use only_open:true (NÃO tente montar isso no seu próprio filter com ne/not — não são operadores confirmados nesta API, e já causou um bug real: chamados 'Resolvido' aparecendo num pedido de 'em aberto'). only_open filtra baseStatus no servidor, depois de buscar, usando o enum confirmado (New/InAttendance/Stopped = aberto; Resolved/Canceled/Closed = não).",
   export_tickets_to_excel:
     "Grava um .xlsx a partir de linhas que VOCÊ já tem em mãos (até 200 linhas — ex: um resultado pequeno que você já resumiu na conversa). NUNCA use isto para exportar o resultado de uma busca grande: você teria que retransmitir cada registro como texto na chamada de ferramenta, e isso trunca silenciosamente antes de completar (é exatamente o bug já visto: só saíam 20-500 de 643 linhas). Para exportar o resultado de uma busca — que é o caso mais comum — use export_tickets_search_to_excel, que busca e grava o arquivo inteiro no servidor, sem os dados passarem por você.",
   export_tickets_search_to_excel:
-    "**Ferramenta certa para 'me dá um Excel/planilha desses chamados'.** Faz a busca exaustiva (como movidesk_search_tickets_exhaustive) E grava o .xlsx em uma única chamada de ferramenta — os registros nunca precisam ser retransmitidos por você, então não há risco de truncar o arquivo. Devolve o caminho do arquivo, o total de linhas gravadas, e se a contagem é exata. Use com o MESMO filter/select que você usaria em movidesk_search_tickets_exhaustive.",
+    "**Ferramenta certa para 'me dá um Excel/planilha desses chamados'.** Faz a busca exaustiva (como movidesk_search_tickets_exhaustive) E grava o .xlsx em uma única chamada de ferramenta — os registros nunca precisam ser retransmitidos por você, então não há risco de truncar o arquivo. Devolve o caminho do arquivo, o total de linhas gravadas, e se a contagem é exata. Use com o MESMO filter/select que você usaria em movidesk_search_tickets_exhaustive, incluindo only_open:true quando o pedido for 'chamados em aberto' (ver descrição de movidesk_search_tickets_exhaustive — não tente filtrar status via OData ne/not).",
   movidesk_create_ticket:
     "Cria um chamado Movidesk. Exige idempotency_key (gerada previamente). Só cria de fato se a chave ainda não tiver um resultado bem-sucedido.",
   movidesk_patch_ticket:
@@ -310,7 +312,7 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
     case "movidesk_search_tickets_exhaustive": {
       const result = await searchTicketsExhaustive(
         { filter: input.filter, select: input.select },
-        { pageSize: input.page_size, maxPages: input.max_pages, source: input.source },
+        { pageSize: input.page_size, maxPages: input.max_pages, source: input.source, onlyOpen: input.only_open },
       );
       // Só devolve uma amostra inline para o modelo comentar/resumir — devolver os
       // milhares de registros completos de volta ao contexto do modelo é desperdício
@@ -330,6 +332,9 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
             : `Total exato: a última página retornou menos que ${input.page_size} registros, confirmando que não há mais resultados.`) +
           (truncatedForDisplay
             ? ` Só as primeiras ${MAX_INLINE_TICKETS} linhas vieram no campo "tickets" (para você comentar/resumir) — o total_found (${result.tickets.length}) já é a contagem real de todos. Para gerar um arquivo com TODOS, use export_tickets_search_to_excel com o mesmo filter/select em vez de tentar retransmitir estes registros.`
+            : "") +
+          (input.only_open && result.fetchedBeforeOpenFilter !== undefined
+            ? ` Filtro only_open aplicado: de ${result.fetchedBeforeOpenFilter} chamados retornados pela busca, ${result.tickets.length} estão em aberto (baseStatus New/InAttendance/Stopped).`
             : ""),
       };
     }
@@ -342,16 +347,30 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
     case "export_tickets_search_to_excel": {
       const result = await searchTicketsExhaustive(
         { filter: input.filter, select: input.select },
-        { pageSize: input.page_size, maxPages: input.max_pages, source: input.source },
+        { pageSize: input.page_size, maxPages: input.max_pages, source: input.source, onlyOpen: input.only_open },
       );
+      if (result.tickets.length === 0) {
+        return {
+          path: null,
+          rowCount: 0,
+          exact_total: !result.hitCap,
+          note: input.only_open
+            ? `Nenhum chamado em aberto encontrado (de ${result.fetchedBeforeOpenFilter ?? 0} retornados pela busca) — nada para exportar.`
+            : "Nenhum chamado encontrado — nada para exportar.",
+        };
+      }
       const columns = input.columns ?? input.select.map((key: string) => ({ header: key, key }));
       const exportResult = await exportRowsToExcel(result.tickets, columns, input.filename_hint);
       return {
         ...exportResult,
         exact_total: !result.hitCap,
-        note: result.hitCap
-          ? `O arquivo contém ${exportResult.rowCount} chamados — atingiu o limite de segurança de ${input.max_pages} páginas, pode haver mais. Chame esta mesma ferramenta de novo com max_pages maior (até 150) se precisar de todos.`
-          : `O arquivo contém todos os ${exportResult.rowCount} chamados encontrados (contagem exata — a API do Movidesk não suporta $count, mas a última página veio incompleta, confirmando o fim dos resultados).`,
+        note:
+          (result.hitCap
+            ? `O arquivo contém ${exportResult.rowCount} chamados — atingiu o limite de segurança de ${input.max_pages} páginas, pode haver mais. Chame esta mesma ferramenta de novo com max_pages maior (até 150) se precisar de todos.`
+            : `O arquivo contém todos os ${exportResult.rowCount} chamados encontrados (contagem exata — a API do Movidesk não suporta $count, mas a última página veio incompleta, confirmando o fim dos resultados).`) +
+          (input.only_open && result.fetchedBeforeOpenFilter !== undefined
+            ? ` Filtro only_open aplicado: de ${result.fetchedBeforeOpenFilter} chamados retornados pela busca, ${exportResult.rowCount} estavam em aberto.`
+            : ""),
       };
     }
 

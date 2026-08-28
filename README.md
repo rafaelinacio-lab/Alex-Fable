@@ -83,10 +83,18 @@ montar o filtro `serviceFull` (ver seção "Serviços, categoria e equipe" do pr
 sistema). Se a exportação do Movidesk mudar, gere um novo `servicos.json` com as colunas
 `id, servico, nome, descricao, disponivelParaTickets, ativo` e substitua o arquivo.
 
-## Contagens exatas e exportação para Excel
+## Contagens exatas, "em aberto" e exportação para Excel
 
-Duas capacidades que exigem ferramentas específicas — não confie no modelo "montando"
+Três capacidades que exigem ferramentas específicas — não confie no modelo "montando"
 isso sozinho a partir de buscas soltas:
+
+- **"Chamados em aberto"** → o agente usa `only_open: true` em
+  `movidesk_search_tickets_exhaustive`/`export_tickets_search_to_excel`, que filtra pelo
+  campo `baseStatus` (enum confirmado: New/InAttendance/Stopped = aberto,
+  Resolved/Canceled/Closed = não) **depois de buscar, no próprio código** — não tenta
+  montar isso como filtro OData (`ne`/`or`/`not` não são operadores confirmados nesta
+  API). Corrige um bug real: um pedido de "chamados em aberto" retornou chamados com
+  status "Resolvido" porque o filtro tentado não excluía status corretamente.
 
 - **"Quantos chamados", "todos os chamados"** → o agente usa
   `movidesk_search_tickets_exhaustive`, que pagina de verdade até o fim (até 150 páginas /

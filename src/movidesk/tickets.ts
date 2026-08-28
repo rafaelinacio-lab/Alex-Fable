@@ -60,11 +60,34 @@ export interface TicketSummary {
   id: number;
   subject: string;
   status: string;
+  baseStatus?: string;
   ownerTeam?: string;
   serviceFirstLevelId?: number;
   category?: string;
   [key: string]: unknown;
 }
+
+/**
+ * Enum confirmado (docs/movidesk-api-tickets.md, seção 12.1) — `baseStatus` é a
+ * classificação canônica do ticket, diferente de `status` (o texto do status
+ * configurado no tenant, ex: "Aguardando", "Em Análise" — pode variar e não é
+ * confiável para decidir se um chamado está "aberto" ou não).
+ */
+export const BASE_STATUS = {
+  NOVO: "New",
+  EM_ATENDIMENTO: "InAttendance",
+  PARADO: "Stopped",
+  CANCELADO: "Canceled",
+  RESOLVIDO: "Resolved",
+  FECHADO: "Closed",
+} as const;
+
+/** "Em aberto" = não resolvido, não cancelado, não fechado. */
+export const OPEN_BASE_STATUSES: readonly string[] = [
+  BASE_STATUS.NOVO,
+  BASE_STATUS.EM_ATENDIMENTO,
+  BASE_STATUS.PARADO,
+];
 
 const MAX_SUBJECT_LENGTH = 128;
 
@@ -136,6 +159,8 @@ export interface ExhaustiveSearchResult {
   pagesFetched: number;
   /** true = paginação foi interrompida pelo limite de segurança, não porque acabaram os resultados. */
   hitCap: boolean;
+  /** Quantos registros vieram da API antes do filtro local de onlyOpen (se usado). */
+  fetchedBeforeOpenFilter?: number;
 }
 
 const DEFAULT_PAGE_SIZE = 100;
@@ -155,10 +180,19 @@ const DEFAULT_MAX_PAGES = 50;
  *
  * `hitCap: true` no retorno significa que o total pode ser MAIOR do que o array
  * devolvido — nunca reporte esse número como "total" sem deixar isso claro.
+ *
+ * `onlyOpen`: filtra "chamados em aberto" (não resolvido/cancelado/fechado) DEPOIS de
+ * buscar, comparando `baseStatus` no código — não via `$filter` OData. Isso é
+ * deliberado: os operadores `ne`/`or`/`not` não são confirmados nesta API (só `eq`,
+ * `and`, `gt`, `ge`, `le`, `contains`, `any` aparecem nos exemplos documentados), então
+ * montar um filtro de exclusão de status arriscaria sintaxe inventada ou, pior, um
+ * filtro que "funciona" mas silenciosamente inclui status errados (já aconteceu:
+ * pediram "em aberto" e vieram chamados "Resolvido"). Filtrar `baseStatus` no código,
+ * com o enum confirmado (`OPEN_BASE_STATUSES`), é a forma robusta.
  */
 export async function searchTicketsExhaustive(
   base: Pick<ODataQuery, "filter" | "select">,
-  opts?: { pageSize?: number; maxPages?: number; source?: "current" | "past" },
+  opts?: { pageSize?: number; maxPages?: number; source?: "current" | "past"; onlyOpen?: boolean },
 ): Promise<ExhaustiveSearchResult> {
   if (!base.select?.length) {
     throw new Error("searchTicketsExhaustive exige select — nunca liste tickets sem restringir os campos retornados.");
@@ -168,16 +202,33 @@ export async function searchTicketsExhaustive(
   const fetchPage = opts?.source === "past" ? searchTicketsPast : searchTickets;
   // orderby por id garante que $skip não pule/repita registros entre páginas.
   const orderby = "id asc";
+  // Garante que baseStatus venha na resposta quando for filtrar por ele — sem isso o
+  // filtro local não teria como funcionar.
+  const select =
+    opts?.onlyOpen && !base.select.includes("baseStatus") ? [...base.select, "baseStatus"] : base.select;
 
   const all: TicketSummary[] = [];
   for (let page = 0; page < maxPages; page++) {
-    const pageResults = await fetchPage({ ...base, orderby, top: pageSize, skip: page * pageSize });
+    const pageResults = await fetchPage({ ...base, select, orderby, top: pageSize, skip: page * pageSize });
     all.push(...pageResults);
     if (pageResults.length < pageSize) {
-      return { tickets: all, pagesFetched: page + 1, hitCap: false };
+      return finishExhaustive(all, page + 1, false, opts?.onlyOpen);
     }
   }
-  return { tickets: all, pagesFetched: maxPages, hitCap: true };
+  return finishExhaustive(all, maxPages, true, opts?.onlyOpen);
+}
+
+function finishExhaustive(
+  all: TicketSummary[],
+  pagesFetched: number,
+  hitCap: boolean,
+  onlyOpen: boolean | undefined,
+): ExhaustiveSearchResult {
+  if (!onlyOpen) {
+    return { tickets: all, pagesFetched, hitCap };
+  }
+  const filtered = all.filter((t) => typeof t.baseStatus === "string" && OPEN_BASE_STATUSES.includes(t.baseStatus));
+  return { tickets: filtered, pagesFetched, hitCap, fetchedBeforeOpenFilter: all.length };
 }
 
 export async function createTicket(

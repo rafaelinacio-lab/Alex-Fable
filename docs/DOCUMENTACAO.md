@@ -199,6 +199,12 @@ Registro do que já foi corrigido, para não reintroduzir os mesmos problemas:
     (evita dormir minutos dentro de uma chamada de ferramenta e mandar requisição durante
     o bloqueio), e a mensagem de erro passou a incluir o `Retry-After` exato e o corpo do
     erro 500 — antes descartados.
+11. **"Chamados em aberto" retornando chamados "Resolvido"**: o agente tentava excluir
+    status via `$filter` OData (`ne`/`or`/`not`, operadores não confirmados nesta API).
+    Corrigido com o parâmetro `only_open` em `searchTicketsExhaustive` — filtra
+    `baseStatus` (enum confirmado: New/InAttendance/Stopped = aberto, Resolved/
+    Canceled/Closed = não) no próprio código, depois de buscar, em vez de depender de
+    sintaxe OData não testada.
 
 ## 9. Limitações conhecidas
 
