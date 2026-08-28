@@ -123,6 +123,15 @@ isso sozinho a partir de buscas soltas:
   relatório legível, não para descarregar bases inteiras; acima disso o agente é
   instruído a usar Excel e explicar o motivo.
 
+## Trocando o modelo da OpenAI
+
+Basta mudar `OPENAI_MODEL` no `.env`. Se usar um modelo de raciocínio (série gpt-5.x —
+gpt-5.6-luna, gpt-5.4, etc.) e receber o erro `Function tools with reasoning_effort are
+not supported for <modelo> ... set reasoning_effort to 'none'`, defina também
+`OPENAI_REASONING_EFFORT=none` no `.env` (veja `.env.example`). Deixe essa variável em
+branco para modelos que não são de raciocínio (ex: gpt-4.1) — passá-la sem necessidade
+pode dar erro em modelos que não aceitam o parâmetro.
+
 ## Segurança e operação
 
 - O `MOVIDESK_TOKEN` só existe dentro de `src/movidesk/client.ts`. O modelo nunca vê o

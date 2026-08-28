@@ -12,12 +12,22 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import OpenAI from "openai";
 import type { ChatCompletionMessageParam, ChatCompletionTool } from "openai/resources/chat/completions";
+import type { ReasoningEffort } from "openai/resources/shared";
 import { TOOL_DESCRIPTIONS, dispatchTool, type AgentContext, type ToolName } from "./tools.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SYSTEM_PROMPT_PATH = path.join(__dirname, "..", "..", "prompts", "movidesk-agent-system-prompt.md");
 
 const MODEL = process.env.OPENAI_MODEL ?? "gpt-4.1";
+/**
+ * Alguns modelos de raciocínio (ex: a série gpt-5.x) recusam function calling em
+ * /v1/chat/completions quando "reasoning" está ativo — a API responde 400 pedindo para
+ * usar /v1/responses OU setar reasoning_effort como 'none'. Como nem todo modelo aceita
+ * este parâmetro, ele só é enviado se `OPENAI_REASONING_EFFORT` estiver definido no
+ * ambiente (ver .env.example). Valores aceitos pela API:
+ * none | minimal | low | medium | high | xhigh | max.
+ */
+const REASONING_EFFORT = process.env.OPENAI_REASONING_EFFORT || undefined;
 
 let cachedSystemPrompt: string | null = null;
 async function loadSystemPrompt(): Promise<string> {
@@ -314,6 +324,7 @@ export class MovideskAgentSession {
         model: MODEL,
         messages: this.messages,
         tools: this.tools,
+        ...(REASONING_EFFORT ? { reasoning_effort: REASONING_EFFORT as ReasoningEffort } : {}),
       });
 
       const choice = response.choices[0];
