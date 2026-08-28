@@ -205,6 +205,13 @@ Registro do que já foi corrigido, para não reintroduzir os mesmos problemas:
     `baseStatus` (enum confirmado: New/InAttendance/Stopped = aberto, Resolved/
     Canceled/Closed = não) no próprio código, depois de buscar, em vez de depender de
     sintaxe OData não testada.
+12. **Conversa mais fluida em consultas amplas**: antes o agente ou executava buscas sem
+    escopo claro (ex: "todos os chamados" sem período) ou fazia listas formais de
+    esclarecimento. Agora, para consultas (nunca para criar/alterar chamado), faz uma
+    pergunta natural e direta sobre o que falta (tipicamente período e status
+    aberto/finalizado) antes de rodar a busca — ver "Consultas amplas" no Passo A do
+    prompt de sistema. Reforçado explicitamente: esse fluxo de consulta é só leitura,
+    nunca dispara `movidesk_create_ticket`/`movidesk_patch_ticket` por conta própria.
 
 ## 9. Limitações conhecidas
 
