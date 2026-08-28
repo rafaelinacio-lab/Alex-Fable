@@ -181,6 +181,11 @@ Registro do que já foi corrigido, para não reintroduzir os mesmos problemas:
    limite de páginas, o agente passou a simular paginação manual pedindo confirmação a
    cada lote. Corrigido subindo o limite (até 150 páginas) e reforçando que buscas
    paginadas são só GETs — executam até o fim numa única chamada de ferramenta.
+8. **Buscar chamados por serviço deve filtrar por `serviceFull`, não `serviceFirstLevelId`**
+   (confirmado pelo usuário em uso real): filtro validado é
+   `serviceFull/any(s: s eq 'Nome do Serviço')`. Documentado na seção "Serviços, categoria
+   e equipe" do prompt de sistema — importante porque pode haver múltiplos serviços
+   cadastrados com o mesmo nome e IDs diferentes.
 
 ## 9. Limitações conhecidas
 

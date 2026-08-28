@@ -194,6 +194,26 @@ Boas práticas:
 - `ownerTeam` deve corresponder exatamente a uma equipe existente e compatível.
 - `contactForm`, quando utilizado, deve corresponder exatamente ao formulário configurado.
 
+**Buscar chamados de um serviço (comportamento confirmado neste tenant): filtre por
+`serviceFull`, não por `serviceFirstLevelId`.**
+
+```
+$filter=serviceFull/any(s: s eq 'Nome do Serviço')
+```
+
+`serviceFull` é a trilha textual do serviço (array de strings) devolvida no ticket — o
+filtro acima é confirmado (`any` com igualdade exata `eq`, seguindo o mesmo padrão já
+confirmado para `clients/any(...)`). Passos:
+
+1. Resolva o nome exato do serviço primeiro (`movidesk_get_service`/`movidesk_search_services`).
+   Pode haver múltiplos serviços com nomes iguais/parecidos e IDs diferentes (ex:
+   "Construshow" cadastrado 5 vezes com IDs distintos) — confirme com o usuário qual, ou
+   se a intenção é buscar por todos os nomes iguais, use `s eq 'Nome'` mesmo assim (o
+   filtro é pelo texto do serviceFull no ticket, não pelo ID escolhido).
+2. Combine com outros filtros via `and` (organização, data, status) do mesmo jeito que os
+   outros exemplos desta seção.
+3. Se o texto do serviço tiver aspas simples, escape dobrando (`odataEscape`/seção 5).
+
 ### Tickets e ações
 
 Estrutura mínima típica validada neste ambiente para ticket público:
