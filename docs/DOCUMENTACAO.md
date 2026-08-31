@@ -202,6 +202,18 @@ modelo), prefixado com `[nome do perfil / equipe]`. Duas buscas separadas por pe
 por status monitorado) em vez de um único filtro com `or`, pelo mesmo motivo da seção
 8.11 (operadores não confirmados).
 
+**Diagnóstico automático quando `checkedCount` vem zero** (`diagnoseEmptyResult`): a causa
+mais comum de "0 chamados encontrados" inesperado não é a ausência real de chamados —
+é o texto de `status` ou `ownerTeam` configurado no perfil não bater EXATAMENTE (o
+`$filter` OData usa `eq`, sensível a maiúsculas/minúsculas e espaços) com o valor real no
+Movidesk. Quando `allTickets.length === 0`, `runFollowUpCheck` roda consultas extras
+baratas (sem `expand`, teto de 5 páginas) só por status, sem o filtro de escopo, para
+distinguir "não existe mesmo nenhum chamado nesse status" de "existem chamados nesse
+status, mas nenhum bate a equipe/owner configurado" — nesse segundo caso, amostra até 8
+valores reais de `ownerTeam` encontrados, para o usuário comparar com o texto configurado
+no perfil. O resultado fica em `FollowUpRunResult.diagnostics` e aparece tanto no anúncio
+da aba Conversa quanto no alerta do botão "Rodar agora" no painel.
+
 **Desligado por padrão** (`FOLLOWUP_AUTOMATION_ENABLED=false`) — é uma mutação autônoma
 que fala com clientes reais sem revisão humana, então puxar código novo (ou criar um
 perfil novo pelo painel) nunca deve ligar isso sozinho; exige opt-in explícito no `.env`.

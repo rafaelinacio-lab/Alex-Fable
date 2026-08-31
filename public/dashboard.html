@@ -801,7 +801,11 @@
         const res = await fetch("/api/followup/profiles/" + id + "/run", { method: "POST" });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "falha ao rodar");
-        alert("Verificado: " + data.checkedCount + " chamado(s). Cobrados: " + data.charged.length + ".");
+        let msg = "Verificado: " + data.checkedCount + " chamado(s). Cobrados: " + data.charged.length + ".";
+        if (data.diagnostics && data.diagnostics.length) {
+          msg += "\n\n🔎 " + data.diagnostics.join("\n\n");
+        }
+        alert(msg);
       } catch (err) {
         alert("Erro: " + err.message);
       } finally {

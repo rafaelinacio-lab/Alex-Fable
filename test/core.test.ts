@@ -18,12 +18,13 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { businessMinutesElapsed, businessDaysToMinutes, BUSINESS_MINUTES_PER_DAY, SLA_SCHEDULE } from "../src/movidesk/businessHours.js";
-import { evaluateTicket } from "../src/agent/followUp.js";
+import { evaluateTicket, runFollowUpCheck } from "../src/agent/followUp.js";
 import {
   listFollowUpProfiles,
   createFollowUpProfile,
   updateFollowUpProfile,
   deleteFollowUpProfile,
+  type FollowUpProfile,
 } from "../src/config/followUpProfiles.js";
 
 test("buildQueryString coloca id/protocol como parâmetro extra (não path) — regressão do bug de endpoint", () => {
@@ -613,6 +614,57 @@ test("painel: API /api/followup/profiles faz CRUD via HTTP (aba Automação)", a
     assert.equal(runRes.status, 409);
   } finally {
     await dashboard.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("runFollowUpCheck: quando não encontra nenhum chamado, roda diagnóstico e aponta a causa provável (equipe/status não bate)", async () => {
+  // runFollowUpCheck sempre chama markFollowUpProfileRan ao final, que lê/escreve
+  // FOLLOWUP_PROFILES_FILE (mesmo arquivo compartilhado com os testes de CRUD acima) —
+  // limpa antes/depois para não deixar um perfil-semente residual no disco.
+  const dir = "./data/followup-profiles-test";
+  rmSync(dir, { recursive: true, force: true });
+  const originalFetch = global.fetch;
+  global.fetch = (async (url: string) => {
+    const filter = new URL(url).searchParams.get("$filter") ?? "";
+    const skip = Number(new URL(url).searchParams.get("$skip") ?? 0);
+    if (filter.includes("ownerTeam eq")) {
+      // busca principal (com filtro de equipe) -> nada encontrado
+      return new Response(JSON.stringify([]), { status: 200 });
+    }
+    // busca de diagnóstico (só por status, sem equipe) -> existem chamados, mas de outras equipes
+    const sample = [
+      { id: 901, ownerTeam: "VIASOFT - Outra Equipe" },
+      { id: 902, ownerTeam: "VIASOFT - Mais Uma" },
+    ];
+    return new Response(JSON.stringify(skip > 0 ? [] : sample), { status: 200 });
+  }) as typeof fetch;
+
+  const profile: FollowUpProfile = {
+    id: "perfil-teste",
+    name: "Sistemas Internos",
+    scopeType: "team",
+    ownerTeam: "VIASOFT - Sistemas Internos",
+    enabled: true,
+    waitingStatuses: ["Aguardando Retorno do Cliente", "Aguardando Validação do Cliente"],
+    thresholdBusinessDays: 3,
+    checkIntervalHours: 24,
+    reminderSenderId: "007",
+    reminderSenderName: "Alex Fable",
+    schedule: SLA_SCHEDULE,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  try {
+    const result = await runFollowUpCheck(profile);
+    assert.equal(result.checkedCount, 0);
+    assert.ok(result.diagnostics?.length, "esperava diagnostics preenchido quando checkedCount é 0");
+    const diag = result.diagnostics!.join(" ");
+    assert.match(diag, /Sem o filtro de equipe, existem \d+ chamado\(s\)/);
+    assert.match(diag, /VIASOFT - Outra Equipe/);
+  } finally {
+    global.fetch = originalFetch;
     rmSync(dir, { recursive: true, force: true });
   }
 });

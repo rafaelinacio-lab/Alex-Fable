@@ -196,7 +196,8 @@ export function startDashboardServer(
       const result = await runFollowUpCheck(profile);
       announceSystemMessage(
         `[${result.profileName} / ${result.scopeLabel}] Verificação manual concluída pelo painel. ` +
-          `Chamados verificados: ${result.checkedCount}. Cobrados: ${result.charged.length}.`,
+          `Chamados verificados: ${result.checkedCount}. Cobrados: ${result.charged.length}.` +
+          (result.diagnostics?.length ? ` 🔎 ${result.diagnostics.join(" ")}` : ""),
       );
       json(200, result);
       return;

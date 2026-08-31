@@ -73,6 +73,12 @@ export interface FollowUpRunResult {
   skipped: FollowUpTicketResult[];
   errors: FollowUpTicketResult[];
   ranAt: string;
+  /**
+   * Preenchido só quando checkedCount === 0 — ajuda a distinguir "não existe mesmo
+   * nenhum chamado nessa situação" de "o texto do status/equipe configurado no perfil
+   * não bate com o valor real" (causa mais comum de zero resultados inesperado).
+   */
+  diagnostics?: string[];
 }
 
 function latestByDate<T extends { createdDate?: string } | { changedDate?: string }>(
@@ -196,6 +202,54 @@ export function describeScope(profile: Pick<FollowUpProfile, "scopeType" | "owne
 }
 
 /**
+ * Quando uma verificação não encontra NENHUM chamado, a causa mais comum não é "não
+ * existe mesmo nenhum chamado nessa situação" — é o texto de `status` ou `ownerTeam`
+ * configurado no perfil não bater EXATAMENTE (o `$filter` OData usa `eq`, sensível a
+ * maiúsculas/minúsculas e espaços) com o valor real no Movidesk. Esta função roda
+ * consultas extras (baratas — sem `expand`, com um teto de páginas pequeno) para
+ * distinguir os dois casos e devolver uma dica acionável em vez de só "0 encontrados".
+ */
+async function diagnoseEmptyResult(profile: FollowUpProfile): Promise<string[]> {
+  const notes: string[] = [];
+  try {
+    let totalByStatusOnly = 0;
+    const teamsSeen = new Set<string>();
+    for (const status of profile.waitingStatuses) {
+      const result = await searchTicketsExhaustive(
+        { filter: `status eq '${status.replace(/'/g, "''")}'`, select: ["id", "ownerTeam"] },
+        { maxPages: 5 }, // até 500 registros — suficiente para diagnóstico, não precisa ser exaustivo
+      );
+      totalByStatusOnly += result.tickets.length;
+      for (const t of result.tickets) {
+        if (typeof t.ownerTeam === "string") teamsSeen.add(t.ownerTeam);
+      }
+    }
+
+    if (totalByStatusOnly === 0) {
+      notes.push(
+        `Nenhum chamado encontrado com o(s) status monitorado(s) (${profile.waitingStatuses.map((s) => `"${s}"`).join(" ou ")}) em TODA a base, mesmo sem filtrar por ${profile.scopeType === "team" ? "equipe" : "owner"}. Confira se o texto do status bate EXATAMENTE (maiúsculas/minúsculas e espaços importam) com o status configurado no Movidesk — o filtro usa comparação exata (eq).`,
+      );
+    } else if (profile.scopeType === "team") {
+      const sample = [...teamsSeen].slice(0, 8);
+      notes.push(
+        `Sem o filtro de equipe, existem ${totalByStatusOnly} chamado(s) com esse(s) status. ` +
+          `Nenhum tinha ownerTeam exatamente igual a "${profile.ownerTeam}". ` +
+          (sample.length
+            ? `Equipes encontradas nesses chamados: ${sample.map((t) => `"${t}"`).join(", ")}. Confira se alguma bate com o texto configurado no perfil (comparação exata, sensível a maiúsculas/minúsculas e espaços).`
+            : "Não foi possível amostrar o ownerTeam desses chamados."),
+      );
+    } else {
+      notes.push(
+        `Existem ${totalByStatusOnly} chamado(s) com esse(s) status na base, mas nenhum tem owner.id igual a "${profile.ownerId}". Confira se o cod_ref configurado no perfil é o do responsável correto.`,
+      );
+    }
+  } catch (err) {
+    notes.push(`Não foi possível rodar o diagnóstico automático: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return notes;
+}
+
+/**
  * Roda a verificação completa de UM perfil: busca os chamados do escopo/status dele,
  * avalia a regra ticket a ticket, cobra os que qualificam, e devolve um resumo. Não
  * lança em caso de falha pontual num ticket — cada erro fica registrado em `errors`.
@@ -226,6 +280,8 @@ export async function runFollowUpCheck(profile: FollowUpProfile): Promise<Follow
     }
   }
 
+  const diagnostics = allTickets.length === 0 ? await diagnoseEmptyResult(profile) : undefined;
+
   const charged: FollowUpTicketResult[] = [];
   const skipped: FollowUpTicketResult[] = [];
   const errors: FollowUpTicketResult[] = [];
@@ -251,6 +307,7 @@ export async function runFollowUpCheck(profile: FollowUpProfile): Promise<Follow
     skipped,
     errors,
     ranAt: now.toISOString(),
+    diagnostics,
   };
 
   await markFollowUpProfileRan(profile.id, runResult.ranAt);

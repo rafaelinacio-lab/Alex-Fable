@@ -45,6 +45,9 @@ function summarize(result: FollowUpRunResult): string {
         ".",
     );
   }
+  if (result.diagnostics?.length) {
+    lines.push("🔎 " + result.diagnostics.join(" "));
+  }
   return lines.join(" ");
 }
 
