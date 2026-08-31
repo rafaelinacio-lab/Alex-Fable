@@ -1,22 +1,29 @@
 /**
  * Motor da automação de cobrança de chamados aguardando retorno/validação do cliente.
  *
- * Regra (confirmada com o usuário, ver src/config/followUp.ts):
- *  1. status do chamado é um dos monitorados ("Aguardando Retorno do Cliente" /
- *     "Aguardando Validação do Cliente").
- *  2. a ÚLTIMA ação do chamado foi feita pelo OWNER (responsável) — se foi o cliente ou
+ * Roda por PERFIL (src/config/followUpProfiles.ts) — cada perfil é uma equipe com sua
+ * própria regra de SLA (janela de expediente, prazo, status monitorados, remetente).
+ * Isso existe porque, além da equipe "Sistemas Internos" original, o usuário pediu para
+ * poder configurar outras equipes com SLAs diferentes pelo painel, sem mexer em código.
+ *
+ * Regra (confirmada com o usuário), dentro de CADA perfil:
+ *  1. o chamado é da equipe (`ownerTeam`) daquele perfil — filtrado no servidor E de
+ *     novo localmente (defesa em profundidade, mesmo padrão de only_open).
+ *  2. status do chamado é um dos monitorados pelo perfil (ex: "Aguardando Retorno do
+ *     Cliente" / "Aguardando Validação do Cliente").
+ *  3. a ÚLTIMA ação do chamado foi feita pelo OWNER (responsável) — se foi o cliente ou
  *     qualquer outra pessoa, o chamado não entra (o cliente já pode ter respondido e o
  *     status só não foi atualizado ainda).
- *  3. o tempo decorrido desde a referência (a mais recente entre a data da última ação
+ *  4. o tempo decorrido desde a referência (a mais recente entre a data da última ação
  *     do owner e a data em que o chamado entrou no status atual), contado em HORAS
- *     ÚTEIS (calendário do SLA — src/movidesk/businessHours.ts), é >= ao limite
- *     configurado (padrão 3 dias úteis).
+ *     ÚTEIS pela janela de expediente DESTE perfil (não a de outro perfil, nem uma
+ *     global fixa — src/movidesk/businessHours.ts), é >= ao limite configurado nele.
  *
- * Cada chamado que bate as três condições recebe uma ação pública automática (ver
- * buildFollowUpMessage), criada pela identidade dedicada configurada — nunca pelo
- * owner do chamado. Cada mutação é auditada (store/audit.ts) e emitida como evento
- * "file_ready"-like para o painel poder mostrar o resultado sem o usuário precisar
- * perguntar (ver src/observability/eventBus.ts).
+ * Cada chamado que bate as quatro condições recebe uma ação pública automática (ver
+ * buildFollowUpMessage), criada pela identidade dedicada configurada NO PERFIL — nunca
+ * pelo owner do chamado. Cada mutação é auditada (store/audit.ts) e emitida como evento
+ * para o painel poder mostrar o resultado sem o usuário precisar perguntar (ver
+ * src/observability/eventBus.ts).
  */
 
 import {
@@ -27,7 +34,8 @@ import {
   type TicketStatusHistoryEntry,
 } from "../movidesk/tickets.js";
 import { businessMinutesElapsed, businessDaysToMinutes } from "../movidesk/businessHours.js";
-import { FOLLOW_UP_CONFIG, buildFollowUpMessage } from "../config/followUp.js";
+import { buildFollowUpMessage, isFollowUpAutomationEnabled } from "../config/followUp.js";
+import { listFollowUpProfiles, markFollowUpProfileRan, type FollowUpProfile } from "../config/followUpProfiles.js";
 import { recordAuditEvent, hashPayload, newCorrelationId } from "../store/audit.js";
 import { emitEvent, newEventId } from "../observability/eventBus.js";
 import { MovideskApiError } from "../movidesk/client.js";
@@ -50,6 +58,9 @@ export interface FollowUpTicketResult {
 }
 
 export interface FollowUpRunResult {
+  profileId: string;
+  profileName: string;
+  ownerTeam: string;
   checkedCount: number;
   charged: FollowUpTicketResult[];
   skipped: FollowUpTicketResult[];
@@ -71,14 +82,18 @@ function latestByDate<T extends { createdDate?: string } | { changedDate?: strin
   });
 }
 
-/** Avalia um único ticket (já com actions/statusHistories expandidos) contra a regra. */
-export function evaluateTicket(ticket: TicketSummary, now: Date = new Date()): FollowUpTicketResult {
+/** Avalia um único ticket (já com actions/statusHistories expandidos) contra a regra de UM perfil. */
+export function evaluateTicket(
+  ticket: TicketSummary,
+  profile: Pick<FollowUpProfile, "ownerTeam" | "thresholdBusinessDays" | "schedule">,
+  now: Date = new Date(),
+): FollowUpTicketResult {
   const base = { id: ticket.id, subject: ticket.subject, status: ticket.status };
 
   // Segunda verificação, além do $filter no servidor (defesa em profundidade — mesmo
   // padrão já usado para "em aberto": nunca confiar só no OData para restringir escopo
   // de uma mutação automática).
-  if (ticket.ownerTeam !== FOLLOW_UP_CONFIG.ownerTeam) {
+  if (ticket.ownerTeam !== profile.ownerTeam) {
     return { ...base, elapsedBusinessHours: 0, action: "skipped_wrong_team" };
   }
 
@@ -104,8 +119,8 @@ export function evaluateTicket(ticket: TicketSummary, now: Date = new Date()): F
   const statusDate = statusEntry?.changedDate ? new Date(statusEntry.changedDate) : undefined;
   const reference = statusDate && statusDate > actionDate ? statusDate : actionDate;
 
-  const elapsedMinutes = businessMinutesElapsed(reference, now);
-  const thresholdMinutes = businessDaysToMinutes(FOLLOW_UP_CONFIG.thresholdBusinessDays);
+  const elapsedMinutes = businessMinutesElapsed(reference, now, { schedule: profile.schedule });
+  const thresholdMinutes = businessDaysToMinutes(profile.thresholdBusinessDays, profile.schedule);
   const elapsedBusinessHours = Math.round((elapsedMinutes / 60) * 10) / 10;
 
   if (elapsedMinutes < thresholdMinutes) {
@@ -115,12 +130,15 @@ export function evaluateTicket(ticket: TicketSummary, now: Date = new Date()): F
   return { ...base, elapsedBusinessHours, action: "charged" };
 }
 
-async function chargeTicket(result: FollowUpTicketResult): Promise<FollowUpTicketResult> {
+async function chargeTicket(
+  result: FollowUpTicketResult,
+  profile: Pick<FollowUpProfile, "reminderSenderId">,
+): Promise<FollowUpTicketResult> {
   const payload = {
     actions: [
       {
         type: 2, // pública — precisa chegar ao cliente
-        createdBy: { id: FOLLOW_UP_CONFIG.reminderSenderId },
+        createdBy: { id: profile.reminderSenderId },
         description: buildFollowUpMessage(result.subject),
       },
     ],
@@ -158,21 +176,20 @@ async function chargeTicket(result: FollowUpTicketResult): Promise<FollowUpTicke
 }
 
 /**
- * Roda a verificação completa: busca os chamados nos status monitorados, avalia a regra
- * ticket a ticket, cobra os que qualificam, e devolve um resumo. Não lança em caso de
- * falha pontual num ticket — cada erro fica registrado em `errors`.
+ * Roda a verificação completa de UM perfil: busca os chamados da equipe/status dele,
+ * avalia a regra ticket a ticket, cobra os que qualificam, e devolve um resumo. Não
+ * lança em caso de falha pontual num ticket — cada erro fica registrado em `errors`.
  */
-export async function runFollowUpCheck(): Promise<FollowUpRunResult> {
+export async function runFollowUpCheck(profile: FollowUpProfile): Promise<FollowUpRunResult> {
   const now = new Date();
   const allTickets: TicketSummary[] = [];
   const seenIds = new Set<number>();
 
   // Duas buscas separadas (uma por status) em vez de um único filtro com "or" — "or" não
   // é operador confirmado nesta API (ver docs/movidesk-api-tickets.md, seção 6). O filtro
-  // por ownerTeam (via "and", operador confirmado) restringe a automação a uma única
-  // equipe — confirmado pelo usuário: só "VIASOFT - Sistemas Internos" deve ser cobrada.
-  const teamFilter = `ownerTeam eq '${FOLLOW_UP_CONFIG.ownerTeam.replace(/'/g, "''")}'`;
-  for (const status of FOLLOW_UP_CONFIG.waitingStatuses) {
+  // por ownerTeam (via "and", operador confirmado) restringe a busca à equipe do perfil.
+  const teamFilter = `ownerTeam eq '${profile.ownerTeam.replace(/'/g, "''")}'`;
+  for (const status of profile.waitingStatuses) {
     const result = await searchTicketsExhaustive({
       filter: `status eq '${status.replace(/'/g, "''")}' and ${teamFilter}`,
       select: ["id", "subject", "status", "owner", "ownerTeam"],
@@ -191,9 +208,9 @@ export async function runFollowUpCheck(): Promise<FollowUpRunResult> {
   const errors: FollowUpTicketResult[] = [];
 
   for (const ticket of allTickets) {
-    const evaluation = evaluateTicket(ticket, now);
+    const evaluation = evaluateTicket(ticket, profile, now);
     if (evaluation.action === "charged") {
-      const chargeResult = await chargeTicket(evaluation);
+      const chargeResult = await chargeTicket(evaluation, profile);
       (chargeResult.action === "charged" ? charged : errors).push(chargeResult);
     } else {
       skipped.push(evaluation);
@@ -201,6 +218,9 @@ export async function runFollowUpCheck(): Promise<FollowUpRunResult> {
   }
 
   const runResult: FollowUpRunResult = {
+    profileId: profile.id,
+    profileName: profile.name,
+    ownerTeam: profile.ownerTeam,
     checkedCount: allTickets.length,
     charged,
     skipped,
@@ -208,14 +228,18 @@ export async function runFollowUpCheck(): Promise<FollowUpRunResult> {
     ranAt: now.toISOString(),
   };
 
+  await markFollowUpProfileRan(profile.id, runResult.ranAt);
+
   emitEvent({
     kind: "tool_call_end",
     id: newEventId(),
     timestamp: now.toISOString(),
-    tool: "followUp.runFollowUpCheck",
+    tool: `followUp.runFollowUpCheck[${profile.name}]`,
     status: errors.length > 0 ? "error" : "ok",
     durationMs: 0,
     output: {
+      profileId: profile.id,
+      ownerTeam: profile.ownerTeam,
       checkedCount: runResult.checkedCount,
       chargedIds: charged.map((c) => c.id),
       errorIds: errors.map((e) => e.id),
@@ -223,4 +247,18 @@ export async function runFollowUpCheck(): Promise<FollowUpRunResult> {
   });
 
   return runResult;
+}
+
+/**
+ * Roda a verificação para TODOS os perfis com `enabled: true`, respeitando o gate
+ * global `FOLLOWUP_AUTOMATION_ENABLED` (se desligado, não busca nada e devolve []).
+ */
+export async function runAllFollowUpChecks(): Promise<FollowUpRunResult[]> {
+  if (!isFollowUpAutomationEnabled()) return [];
+  const profiles = await listFollowUpProfiles();
+  const results: FollowUpRunResult[] = [];
+  for (const profile of profiles.filter((p) => p.enabled)) {
+    results.push(await runFollowUpCheck(profile));
+  }
+  return results;
 }

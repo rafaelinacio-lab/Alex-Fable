@@ -21,6 +21,15 @@ import { WebSocketServer, WebSocket } from "ws";
 import { agentEventBus, type AgentEvent } from "../observability/eventBus.js";
 import type { MovideskAgentSession } from "../agent/orchestrator.js";
 import { DEFAULT_EXPORTS_DIR } from "../local/exportsDir.js";
+import {
+  listFollowUpProfiles,
+  createFollowUpProfile,
+  updateFollowUpProfile,
+  deleteFollowUpProfile,
+  type FollowUpProfileInput,
+} from "../config/followUpProfiles.js";
+import { runFollowUpCheck } from "../agent/followUp.js";
+import { isFollowUpAutomationEnabled } from "../config/followUp.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DASHBOARD_HTML_PATH = path.join(__dirname, "..", "..", "public", "dashboard.html");
@@ -37,6 +46,14 @@ agentEventBus.on("event", (event: AgentEvent) => {
   eventHistory.push(event);
   if (eventHistory.length > EVENT_HISTORY_LIMIT) eventHistory.shift();
 });
+
+/** Lê e faz parse do corpo JSON de uma requisição (sem lib externa — corpo é sempre pequeno aqui). */
+async function readJsonBody(req: import("node:http").IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) chunks.push(chunk as Buffer);
+  const raw = Buffer.concat(chunks).toString("utf8");
+  return raw ? JSON.parse(raw) : {};
+}
 
 export interface ChatMessage {
   id: string;
@@ -116,9 +133,91 @@ export function startDashboardServer(
       return;
     }
 
+    if (req.url?.startsWith("/api/followup/")) {
+      handleFollowUpApi(req, res).catch((err) => {
+        const status = err instanceof Error && err.message.includes("não encontrado") ? 404 : 400;
+        res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+      });
+      return;
+    }
+
     res.writeHead(404);
     res.end("not found");
   });
+
+  /**
+   * API da aba "Automação" do painel — CRUD de perfis (equipe + regra de SLA) da
+   * cobrança automática de retorno do cliente. Ver src/config/followUpProfiles.ts.
+   */
+  async function handleFollowUpApi(
+    req: import("node:http").IncomingMessage,
+    res: import("node:http").ServerResponse,
+  ): Promise<void> {
+    const url = new URL(req.url ?? "", "http://localhost");
+    const parts = url.pathname.split("/").filter(Boolean); // ["api","followup","profiles", id?, "run"?]
+    const method = req.method ?? "GET";
+
+    function json(status: number, body: unknown): void {
+      res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify(body));
+    }
+
+    if (parts[2] !== "profiles") {
+      json(404, { error: "rota não encontrada" });
+      return;
+    }
+
+    const id = parts[3];
+
+    if (!id && method === "GET") {
+      const profiles = await listFollowUpProfiles();
+      json(200, { profiles, automationEnabled: isFollowUpAutomationEnabled() });
+      return;
+    }
+
+    if (!id && method === "POST") {
+      const input = (await readJsonBody(req)) as FollowUpProfileInput;
+      const created = await createFollowUpProfile(input);
+      json(201, created);
+      return;
+    }
+
+    if (id && parts[4] === "run" && method === "POST") {
+      if (!isFollowUpAutomationEnabled()) {
+        json(409, { error: "FOLLOWUP_AUTOMATION_ENABLED não está 'true' — a automação está desligada no ambiente." });
+        return;
+      }
+      const profile = (await listFollowUpProfiles()).find((p) => p.id === id);
+      if (!profile) {
+        json(404, { error: `Perfil não encontrado: ${id}` });
+        return;
+      }
+      const result = await runFollowUpCheck(profile);
+      announceSystemMessage(
+        `[${result.profileName} / ${result.ownerTeam}] Verificação manual concluída pelo painel. ` +
+          `Chamados verificados: ${result.checkedCount}. Cobrados: ${result.charged.length}.`,
+      );
+      json(200, result);
+      return;
+    }
+
+    if (id && method === "PUT") {
+      const input = (await readJsonBody(req)) as FollowUpProfileInput;
+      const updated = await updateFollowUpProfile(id, input);
+      json(200, updated);
+      return;
+    }
+
+    if (id && method === "DELETE") {
+      await deleteFollowUpProfile(id);
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    json(404, { error: "rota não encontrada" });
+  }
 
   // --- canal de eventos (aba "Atividade") ---
   // noServer:true nas duas instâncias + roteamento manual pelo path abaixo, porque duas

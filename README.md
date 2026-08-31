@@ -132,67 +132,75 @@ not supported for <modelo> ... set reasoning_effort to 'none'`, defina também
 branco para modelos que não são de raciocínio (ex: gpt-4.1) — passá-la sem necessidade
 pode dar erro em modelos que não aceitam o parâmetro.
 
-## Cobrança automática de retorno do cliente (proativa)
+## Cobrança automática de retorno do cliente (proativa, configurável pelo painel)
 
 O agente pode rodar sozinho, em segundo plano, e cobrar chamados que estão "parados"
-esperando o cliente. Implementação: `src/agent/followUp.ts` (regra),
+esperando o cliente — em uma ou VÁRIAS equipes, cada uma com sua própria regra de SLA
+(status monitorados, expediente/janela de horário útil, prazo, intervalo, remetente).
+Implementação: `src/agent/followUp.ts` (regra, roda por perfil),
+`src/config/followUpProfiles.ts` (perfis — CRUD, um por equipe),
 `src/agent/followUpScheduler.ts` (agendamento em `src/agent/cli.ts`),
-`src/config/followUp.ts` (configuração).
+`src/config/followUp.ts` (interruptor geral).
 
-**Regra**: um chamado é cobrado quando, ao mesmo tempo:
+**Configuração pelo painel** (aba "Automação", `http://localhost:$DASHBOARD_PORT`): cada
+"perfil" é uma equipe com sua própria regra — nome, equipe (`ownerTeam`, tem que bater
+exatamente com o Movidesk), status monitorados, prazo em dias úteis, sua PRÓPRIA janela
+de expediente (manhã/tarde), intervalo de verificação e a identidade que assina a
+cobrança. Dá pra criar, editar, habilitar/desabilitar e excluir perfis sem mexer em
+código nem reiniciar o processo — é exatamente para isso que existe: hoje só
+"Sistemas Internos" está configurada, mas amanhã pode existir uma equipe com SLA
+diferente rodando ao lado, sem precisar alterar nada além do painel. Na primeira
+execução um perfil é criado sozinho para "VIASOFT - Sistemas Internos" (compatibilidade
+com a configuração anterior, que era fixa por variável de ambiente).
 
-0. o chamado é da equipe `FOLLOWUP_OWNER_TEAM` (padrão "VIASOFT - Sistemas Internos") —
-   nenhuma outra equipe é verificada; o filtro é aplicado tanto na busca (`$filter`
-   OData) quanto localmente no código (defesa em profundidade), então mesmo que o
-   filtro do servidor falhasse silenciosamente, nenhum chamado de outra equipe seria
-   cobrado;
-1. o `status` é "Aguardando Retorno do Cliente" ou "Aguardando Validação do Cliente";
+**Regra**, aplicada dentro de CADA perfil: um chamado é cobrado quando, ao mesmo tempo:
+
+0. o chamado é da equipe daquele perfil — nenhuma outra é tocada por ele; o filtro é
+   aplicado tanto na busca (`$filter` OData) quanto localmente no código (defesa em
+   profundidade), então mesmo que o filtro do servidor falhasse silenciosamente, nenhum
+   chamado de outra equipe seria cobrado;
+1. o `status` é um dos monitorados por aquele perfil (padrão: "Aguardando Retorno do
+   Cliente" ou "Aguardando Validação do Cliente");
 2. a ÚLTIMA ação do chamado foi feita pelo `owner` (responsável) — se o cliente (ou
    qualquer outra pessoa) foi quem agiu por último, o chamado não é cobrado (pode ser
    que o cliente já tenha respondido e o status só não foi atualizado ainda);
 3. o tempo decorrido desde a referência — a mais recente entre a data dessa última ação
-   e a data em que o chamado entrou no status atual (`statusHistories`) — já passou de
-   `FOLLOWUP_THRESHOLD_BUSINESS_DAYS` (padrão 3), contado em **horas úteis** pelo
-   calendário do SLA (seg-sex 07:45-12:00 e 13:30-18:00 — `src/movidesk/businessHours.ts`),
-   não em dias corridos.
+   e a data em que o chamado entrou no status atual (`statusHistories`) — já passou do
+   prazo configurado NAQUELE perfil, contado em **horas úteis pela janela de expediente
+   DAQUELE perfil** (não uma janela global fixa — `src/movidesk/businessHours.ts`), não
+   em dias corridos. Equipes com SLAs diferentes usam janelas diferentes.
 
 Cada chamado que bate todas as condições recebe uma ação pública automática, publicada
-por uma identidade dedicada (`FOLLOWUP_SENDER_COD_REF`, "Alex Fable" — nunca o owner
+pela identidade configurada no perfil (padrão "Alex Fable", cod_ref 007 — nunca o owner
 individual). Como o remetente da cobrança não é o owner, na rodada seguinte a regra 2
 já não bate mais para aquele chamado (a última ação passa a ser da própria automação)
 — isso evita cobrar o mesmo silêncio duas vezes, sem precisar de nenhum controle extra.
 
 ### Onde acompanhar no painel
 
-- **Aba "Conversa"** (`http://localhost:$DASHBOARD_PORT`): ao fim de cada rodada (a cada
-  `FOLLOWUP_CHECK_INTERVAL_HOURS`, mais uma logo na subida do processo), aparece um aviso
-  em itálico marcado como "automação" com o resumo — quantos chamados foram verificados,
-  quais foram cobrados (`#id`), e falhas, se houver. É publicado direto pelo processo
+- **Aba "Automação"**: lista todos os perfis, com o estado do interruptor geral no
+  topo, um card por equipe (status monitorados, prazo, expediente, intervalo, remetente,
+  última execução) e botões para Editar, Rodar agora e Excluir cada um; o botão "+ Novo
+  perfil" cria outra equipe do zero.
+- **Aba "Conversa"**: ao fim de cada rodada, aparece um aviso em itálico marcado como
+  "automação" com o resumo daquele perfil — quantos chamados foram verificados, quais
+  foram cobrados (`#id`), e falhas, se houver. É publicado direto pelo processo
   (`dashboard.announceSystemMessage`), sem passar pelo modelo.
 - **Aba "Atividade"**: cada rodada também aparece como uma chamada de ferramenta
-  `followUp.runFollowUpCheck` (status ok/error, com `checkedCount`/`chargedIds`/`errorIds`
-  no output) — é o mesmo canal de eventos usado para toda chamada real à API do Movidesk,
-  então dá pra ver ali as buscas (`GET /tickets`) e o `PATCH /tickets` de cada cobrança.
+  `followUp.runFollowUpCheck[<nome do perfil>]` (status ok/error, com
+  `checkedCount`/`chargedIds`/`errorIds` no output) — é o mesmo canal de eventos usado
+  para toda chamada real à API do Movidesk, então dá pra ver ali as buscas
+  (`GET /tickets`) e o `PATCH /tickets` de cada cobrança.
 - Também dá pra pedir "verifica agora" na conversa — o agente chama
-  `check_pending_customer_tickets()` na hora, fora do ciclo automático.
+  `check_pending_customer_tickets()`, que roda TODOS os perfis habilitados na hora, fora
+  do ciclo automático.
 
-**Desligada por padrão** (`FOLLOWUP_AUTOMATION_ENABLED=false`): é uma automação que
-publica mensagens para clientes reais sem revisão humana — puxar código novo nunca deve
-ligar isso sozinho. Para ativar, defina no `.env`:
-
-```
-FOLLOWUP_AUTOMATION_ENABLED=true
-FOLLOWUP_THRESHOLD_BUSINESS_DAYS=3   # opcional, padrão 3
-FOLLOWUP_CHECK_INTERVAL_HOURS=24     # opcional, padrão 24
-FOLLOWUP_SENDER_COD_REF=007          # opcional, padrão "007"
-```
-
-Com a automação ligada, o agente roda a verificação uma vez logo na subida do processo
-e depois a cada `FOLLOWUP_CHECK_INTERVAL_HOURS`; o resumo de cada rodada aparece na aba
-"Conversa" do painel como uma mensagem de sistema (sem precisar perguntar). O usuário
-também pode pedir para rodar na hora, fora do ciclo — o agente usa a ferramenta
-`check_pending_customer_tickets()` para isso, que respeita o mesmo gate
-(`FOLLOWUP_AUTOMATION_ENABLED`).
+**Desligada por padrão** (`FOLLOWUP_AUTOMATION_ENABLED=false`, no `.env`): é uma
+automação que publica mensagens para clientes reais sem revisão humana — puxar código
+novo (ou criar um perfil novo pelo painel) nunca deve ligar isso sozinho. Esse
+interruptor é geral: mesmo com perfis habilitados no painel, nada roda enquanto ele não
+for `true`. Depois de ativado, cada perfil roda sozinho no seu próprio intervalo
+(verificado a cada `FOLLOWUP_TICK_MINUTES`, padrão 15min — não precisa mexer nisso).
 
 ## Segurança e operação
 

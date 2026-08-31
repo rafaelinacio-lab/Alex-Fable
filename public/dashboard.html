@@ -251,6 +251,64 @@
   }
   #chatSend:disabled { opacity: 0.5; cursor: default; }
   .typing { color: var(--muted); font-size: 12px; align-self: flex-start; padding-left: 4px; }
+
+  /* --- aba "Automação" --- */
+  #automationView { padding: 4px 4px 24px; }
+  .gate-banner {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--panel); border: 1px solid var(--panel-border);
+    border-radius: 10px; padding: 12px 16px; margin-bottom: 16px; font-size: 13px;
+  }
+  .gate-banner.on { border-color: var(--ok); }
+  .gate-banner.off { border-color: var(--err); color: var(--err); }
+  .gate-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+  .gate-banner.on .gate-dot { background: var(--ok); }
+  .gate-banner.off .gate-dot { background: var(--err); }
+  .profiles-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .btn {
+    background: var(--panel); border: 1px solid var(--panel-border); color: var(--text);
+    border-radius: 8px; padding: 7px 14px; font-size: 13px; cursor: pointer; font-family: inherit;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.danger:hover { border-color: var(--err); color: var(--err); }
+  .profile-card {
+    background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 10px;
+  }
+  .profile-card.disabled { opacity: 0.55; }
+  .profile-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .profile-title { font-weight: 600; font-size: 14px; }
+  .profile-team { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .profile-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .profile-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .profile-meta b { color: var(--text); font-weight: 600; }
+  .switch { position: relative; display: inline-block; width: 34px; height: 19px; flex-shrink: 0; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .slider {
+    position: absolute; inset: 0; background: var(--panel-border); border-radius: 999px; cursor: pointer; transition: 0.15s;
+  }
+  .switch .slider::before {
+    content: ""; position: absolute; width: 15px; height: 15px; left: 2px; top: 2px;
+    background: #fff; border-radius: 50%; transition: 0.15s;
+  }
+  .switch input:checked + .slider { background: var(--ok); }
+  .switch input:checked + .slider::before { transform: translateX(15px); }
+  .profile-form {
+    background: var(--panel); border: 1px solid var(--accent); border-radius: 10px;
+    padding: 16px; margin-bottom: 16px;
+  }
+  .profile-form h3 { margin: 0 0 12px; font-size: 14px; }
+  .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px 14px; }
+  .form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+  .form-grid input {
+    background: #0d1219; border: 1px solid var(--panel-border); color: var(--text);
+    border-radius: 6px; padding: 7px 10px; font-size: 13px; font-family: inherit;
+  }
+  .form-grid input:focus { outline: none; border-color: var(--accent); }
+  .form-hint { grid-column: 1 / -1; font-size: 11px; color: var(--muted); }
+  .form-buttons { display: flex; gap: 8px; margin-top: 14px; }
+  .form-error { color: var(--err); font-size: 12px; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -265,6 +323,7 @@
 <div class="tabs">
   <button data-tab="activity" class="active">Atividade</button>
   <button data-tab="chat">Conversa</button>
+  <button data-tab="automation">Automação</button>
 </div>
 
 <div id="activityView" class="view active">
@@ -292,6 +351,18 @@
     <textarea id="chatInput" rows="1" placeholder="Digite sua mensagem para o agente…"></textarea>
     <button id="chatSend" type="submit">Enviar</button>
   </form>
+</div>
+
+<div id="automationView" class="view">
+  <div id="gateBanner" class="gate-banner"></div>
+  <div class="profiles-toolbar">
+    <div class="sub" style="color:var(--muted); font-size:12px;">
+      Cada perfil cobra chamados "Aguardando Retorno/Validação do Cliente" de UMA equipe, com sua própria regra de SLA (expediente e prazo).
+    </div>
+    <button class="btn primary" id="newProfileBtn">+ Novo perfil</button>
+  </div>
+  <div id="profileFormWrap"></div>
+  <div id="profilesList"></div>
 </div>
 
 <script>
@@ -501,6 +572,8 @@
       if (btn.dataset.tab === "chat") {
         chatInput.focus();
         chatLog.scrollTop = chatLog.scrollHeight;
+      } else if (btn.dataset.tab === "automation") {
+        loadFollowUpProfiles();
       }
     });
   });
@@ -617,6 +690,213 @@
 
   chatEmptyState();
   connectChat();
+
+  // --- aba "Automação" (cobrança de retorno do cliente, um perfil por equipe) ---
+  const gateBanner = document.getElementById("gateBanner");
+  const profilesList = document.getElementById("profilesList");
+  const profileFormWrap = document.getElementById("profileFormWrap");
+  const newProfileBtn = document.getElementById("newProfileBtn");
+
+  function minutesToHHMM(min) {
+    const h = Math.floor(min / 60).toString().padStart(2, "0");
+    const m = Math.round(min % 60).toString().padStart(2, "0");
+    return h + ":" + m;
+  }
+  function hhmmToMinutes(hhmm) {
+    const [h, m] = hhmm.split(":").map(Number);
+    return h * 60 + m;
+  }
+
+  async function loadFollowUpProfiles() {
+    profilesList.innerHTML = '<div class="empty">Carregando…</div>';
+    try {
+      const res = await fetch("/api/followup/profiles");
+      const data = await res.json();
+      renderGateBanner(data.automationEnabled);
+      renderProfiles(data.profiles);
+    } catch (err) {
+      profilesList.innerHTML = '<div class="empty">Falha ao carregar perfis: ' + escapeHtml(String(err)) + "</div>";
+    }
+  }
+
+  function renderGateBanner(enabled) {
+    gateBanner.className = "gate-banner " + (enabled ? "on" : "off");
+    gateBanner.innerHTML =
+      '<span class="gate-dot"></span><span>' +
+      (enabled
+        ? "Automação LIGADA (FOLLOWUP_AUTOMATION_ENABLED=true). Perfis marcados como habilitados abaixo rodam de verdade."
+        : "Automação DESLIGADA globalmente (FOLLOWUP_AUTOMATION_ENABLED não é \"true\" no ambiente). " +
+          "Nenhum perfil roda, mesmo os habilitados abaixo — ajuste isso no .env e reinicie o agente para ativar.") +
+      "</span>";
+  }
+
+  function fmtLastRun(iso) {
+    if (!iso) return "nunca rodou";
+    return new Date(iso).toLocaleString("pt-BR");
+  }
+
+  function renderProfiles(profiles) {
+    if (!profiles.length) {
+      profilesList.innerHTML = '<div class="empty">Nenhum perfil configurado ainda.</div>';
+      return;
+    }
+    profilesList.innerHTML = "";
+    for (const p of profiles) {
+      const card = document.createElement("div");
+      card.className = "profile-card" + (p.enabled ? "" : " disabled");
+      card.innerHTML =
+        '<div class="profile-head">' +
+        '<div><div class="profile-title">' + escapeHtml(p.name) + '</div>' +
+        '<div class="profile-team">' + escapeHtml(p.ownerTeam) + "</div></div>" +
+        '<div class="profile-actions">' +
+        '<label class="switch" title="Habilitado"><input type="checkbox" ' + (p.enabled ? "checked" : "") +
+        ' data-action="toggle" data-id="' + p.id + '"><span class="slider"></span></label>' +
+        '<button class="btn" data-action="run" data-id="' + p.id + '">Rodar agora</button>' +
+        '<button class="btn" data-action="edit" data-id="' + p.id + '">Editar</button>' +
+        '<button class="btn danger" data-action="delete" data-id="' + p.id + '">Excluir</button>' +
+        "</div></div>" +
+        '<div class="profile-meta">' +
+        "<span>Status monitorados: <b>" + escapeHtml(p.waitingStatuses.join(", ")) + "</b></span>" +
+        "<span>Prazo: <b>" + p.thresholdBusinessDays + " dia(s) útil(eis)</b></span>" +
+        "<span>Expediente: <b>" + minutesToHHMM(p.schedule.morningStart) + "–" + minutesToHHMM(p.schedule.morningEnd) +
+        " e " + minutesToHHMM(p.schedule.afternoonStart) + "–" + minutesToHHMM(p.schedule.afternoonEnd) + "</b></span>" +
+        "<span>Verifica a cada <b>" + p.checkIntervalHours + "h</b></span>" +
+        "<span>Remetente: <b>" + escapeHtml(p.reminderSenderName) + " (cod_ref " + escapeHtml(p.reminderSenderId) + ")</b></span>" +
+        "<span>Última execução: <b>" + fmtLastRun(p.lastRunAt) + "</b></span>" +
+        "</div>";
+      profilesList.appendChild(card);
+    }
+  }
+
+  profilesList.addEventListener("click", async (e) => {
+    const btn = e.target.closest("[data-action]");
+    if (!btn) return;
+    const id = btn.dataset.id;
+    const action = btn.dataset.action;
+    if (action === "toggle") return; // tratado no listener "change" abaixo
+    if (action === "delete") {
+      if (!confirm("Excluir este perfil? A equipe deixa de ser verificada.")) return;
+      await fetch("/api/followup/profiles/" + id, { method: "DELETE" });
+      loadFollowUpProfiles();
+    } else if (action === "run") {
+      btn.disabled = true;
+      btn.textContent = "Rodando…";
+      try {
+        const res = await fetch("/api/followup/profiles/" + id + "/run", { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "falha ao rodar");
+        alert("Verificado: " + data.checkedCount + " chamado(s). Cobrados: " + data.charged.length + ".");
+      } catch (err) {
+        alert("Erro: " + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Rodar agora";
+        loadFollowUpProfiles();
+      }
+    } else if (action === "edit") {
+      const res = await fetch("/api/followup/profiles");
+      const data = await res.json();
+      const profile = data.profiles.find((p) => p.id === id);
+      if (profile) openProfileForm(profile);
+    }
+  });
+
+  profilesList.addEventListener("change", async (e) => {
+    if (e.target.dataset.action !== "toggle") return;
+    const id = e.target.dataset.id;
+    const res = await fetch("/api/followup/profiles");
+    const data = await res.json();
+    const profile = data.profiles.find((p) => p.id === id);
+    if (!profile) return;
+    await fetch("/api/followup/profiles/" + id, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...profile, enabled: e.target.checked }),
+    });
+    loadFollowUpProfiles();
+  });
+
+  newProfileBtn.addEventListener("click", () => openProfileForm(null));
+
+  function openProfileForm(profile) {
+    const isEdit = !!profile;
+    const v = profile || {
+      name: "",
+      ownerTeam: "",
+      enabled: true,
+      waitingStatuses: ["Aguardando Retorno do Cliente", "Aguardando Validação do Cliente"],
+      thresholdBusinessDays: 3,
+      checkIntervalHours: 24,
+      reminderSenderId: "007",
+      reminderSenderName: "Alex Fable",
+      schedule: { morningStart: 465, morningEnd: 720, afternoonStart: 810, afternoonEnd: 1080 },
+    };
+    const wrap = document.createElement("div");
+    wrap.className = "profile-form";
+    wrap.innerHTML =
+      "<h3>" + (isEdit ? "Editar perfil" : "Novo perfil") + "</h3>" +
+      '<div class="form-grid">' +
+      '<label>Nome (rótulo)<input id="pf-name" value="' + escapeAttr(v.name) + '"></label>' +
+      '<label>Equipe (ownerTeam, exato)<input id="pf-team" value="' + escapeAttr(v.ownerTeam) + '"></label>' +
+      '<label>Status monitorados (separados por vírgula)<input id="pf-statuses" value="' + escapeAttr(v.waitingStatuses.join(", ")) + '"></label>' +
+      '<label>Prazo (dias úteis)<input id="pf-threshold" type="number" min="1" value="' + v.thresholdBusinessDays + '"></label>' +
+      '<label>Verificar a cada (horas)<input id="pf-interval" type="number" min="1" value="' + v.checkIntervalHours + '"></label>' +
+      '<label>Remetente — cod_ref<input id="pf-senderid" value="' + escapeAttr(v.reminderSenderId) + '"></label>' +
+      '<label>Remetente — nome<input id="pf-sendername" value="' + escapeAttr(v.reminderSenderName) + '"></label>' +
+      '<label>Expediente manhã — início<input id="pf-m-start" type="time" value="' + minutesToHHMM(v.schedule.morningStart) + '"></label>' +
+      '<label>Expediente manhã — fim<input id="pf-m-end" type="time" value="' + minutesToHHMM(v.schedule.morningEnd) + '"></label>' +
+      '<label>Expediente tarde — início<input id="pf-a-start" type="time" value="' + minutesToHHMM(v.schedule.afternoonStart) + '"></label>' +
+      '<label>Expediente tarde — fim<input id="pf-a-end" type="time" value="' + minutesToHHMM(v.schedule.afternoonEnd) + '"></label>' +
+      '<div class="form-hint">Janela de expediente própria deste perfil (o SLA dessa equipe) — seg-sex, os fins de semana já são sempre excluídos. "Prazo" é contado nessas horas úteis, não em dias corridos.</div>' +
+      "</div>" +
+      '<div id="pf-error" class="form-error" hidden></div>' +
+      '<div class="form-buttons">' +
+      '<button class="btn primary" id="pf-save">' + (isEdit ? "Salvar" : "Criar perfil") + '</button>' +
+      '<button class="btn" id="pf-cancel">Cancelar</button>' +
+      "</div>";
+    profileFormWrap.innerHTML = "";
+    profileFormWrap.appendChild(wrap);
+    wrap.querySelector("#pf-cancel").addEventListener("click", () => (profileFormWrap.innerHTML = ""));
+    wrap.querySelector("#pf-save").addEventListener("click", async () => {
+      const errorEl = wrap.querySelector("#pf-error");
+      errorEl.hidden = true;
+      const payload = {
+        name: wrap.querySelector("#pf-name").value.trim(),
+        ownerTeam: wrap.querySelector("#pf-team").value.trim(),
+        enabled: v.enabled,
+        waitingStatuses: wrap.querySelector("#pf-statuses").value.split(",").map((s) => s.trim()).filter(Boolean),
+        thresholdBusinessDays: Number(wrap.querySelector("#pf-threshold").value),
+        checkIntervalHours: Number(wrap.querySelector("#pf-interval").value),
+        reminderSenderId: wrap.querySelector("#pf-senderid").value.trim(),
+        reminderSenderName: wrap.querySelector("#pf-sendername").value.trim(),
+        schedule: {
+          morningStart: hhmmToMinutes(wrap.querySelector("#pf-m-start").value),
+          morningEnd: hhmmToMinutes(wrap.querySelector("#pf-m-end").value),
+          afternoonStart: hhmmToMinutes(wrap.querySelector("#pf-a-start").value),
+          afternoonEnd: hhmmToMinutes(wrap.querySelector("#pf-a-end").value),
+        },
+      };
+      try {
+        const url = isEdit ? "/api/followup/profiles/" + profile.id : "/api/followup/profiles";
+        const res = await fetch(url, {
+          method: isEdit ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "falha ao salvar");
+        profileFormWrap.innerHTML = "";
+        loadFollowUpProfiles();
+      } catch (err) {
+        errorEl.textContent = err.message;
+        errorEl.hidden = false;
+      }
+    });
+  }
+
+  function escapeAttr(s) {
+    return escapeHtml(s).replace(/"/g, "&quot;");
+  }
 })();
 </script>
 </body>

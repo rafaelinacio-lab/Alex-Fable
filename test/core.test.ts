@@ -17,8 +17,14 @@ import { emitEvent, newEventId } from "../src/observability/eventBus.js";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { businessMinutesElapsed, businessDaysToMinutes, BUSINESS_MINUTES_PER_DAY } from "../src/movidesk/businessHours.js";
+import { businessMinutesElapsed, businessDaysToMinutes, BUSINESS_MINUTES_PER_DAY, SLA_SCHEDULE } from "../src/movidesk/businessHours.js";
 import { evaluateTicket } from "../src/agent/followUp.js";
+import {
+  listFollowUpProfiles,
+  createFollowUpProfile,
+  updateFollowUpProfile,
+  deleteFollowUpProfile,
+} from "../src/config/followUpProfiles.js";
 
 test("buildQueryString coloca id/protocol como parâmetro extra (não path) — regressão do bug de endpoint", () => {
   const qs = buildQueryString({ extra: { id: 123 } });
@@ -386,6 +392,12 @@ test("businessMinutesElapsed calcula horário útil conforme o SLA (seg-sex 07:4
 test("evaluateTicket (cobrança automática): só cobra quando última ação é do owner E o prazo em horas úteis venceu", () => {
   const now = new Date("2026-04-08T15:00:00Z"); // quarta-feira, 12:00 local
 
+  const profile = {
+    ownerTeam: "VIASOFT - Sistemas Internos",
+    thresholdBusinessDays: 3,
+    schedule: SLA_SCHEDULE,
+  };
+
   const base = {
     id: 1,
     subject: "Chamado teste",
@@ -400,7 +412,7 @@ test("evaluateTicket (cobrança automática): só cobra quando última ação é
     actions: [{ createdDate: "2026-04-01T15:00:00Z", createdBy: { id: "007-owner" } }],
     statusHistories: [{ status: base.status, changedDate: "2026-04-01T15:00:00Z" }],
   };
-  assert.equal(evaluateTicket(vencido, now).action, "charged");
+  assert.equal(evaluateTicket(vencido, profile, now).action, "charged");
 
   // Cliente respondeu por último (mesmo que o prazo já tenha passado) -> nunca cobra
   const clienteRespondeu = {
@@ -411,7 +423,7 @@ test("evaluateTicket (cobrança automática): só cobra quando última ação é
       { createdDate: "2026-04-02T15:00:00Z", createdBy: { id: "cliente-123" } },
     ],
   };
-  assert.equal(evaluateTicket(clienteRespondeu, now).action, "skipped_owner_not_last");
+  assert.equal(evaluateTicket(clienteRespondeu, profile, now).action, "skipped_owner_not_last");
 
   // Owner respondeu ontem (dentro do prazo de 3 dias úteis) -> ainda não cobra
   const dentroDoPrazo = {
@@ -420,14 +432,144 @@ test("evaluateTicket (cobrança automática): só cobra quando última ação é
     actions: [{ createdDate: "2026-04-07T15:00:00Z", createdBy: { id: "007-owner" } }],
     statusHistories: [{ status: base.status, changedDate: "2026-04-07T15:00:00Z" }],
   };
-  assert.equal(evaluateTicket(dentroDoPrazo, now).action, "skipped_within_threshold");
+  assert.equal(evaluateTicket(dentroDoPrazo, profile, now).action, "skipped_within_threshold");
 
   // Sem owner -> não dá pra confirmar a regra -> não cobra
   const semOwner = { ...vencido, id: 4, owner: undefined };
-  assert.equal(evaluateTicket(semOwner, now).action, "skipped_no_data");
+  assert.equal(evaluateTicket(semOwner, profile, now).action, "skipped_no_data");
 
   // Equipe diferente de "VIASOFT - Sistemas Internos" -> nunca cobra, mesmo vencido e
   // com a última ação do owner (escopo confirmado pelo usuário: só essa equipe).
   const outraEquipe = { ...vencido, id: 5, ownerTeam: "VIASOFT - Suporte Oracle Cloud" };
-  assert.equal(evaluateTicket(outraEquipe, now).action, "skipped_wrong_team");
+  assert.equal(evaluateTicket(outraEquipe, profile, now).action, "skipped_wrong_team");
+});
+
+test("evaluateTicket respeita a janela de expediente PRÓPRIA do perfil (SLAs diferentes por equipe)", () => {
+  // Perfil com expediente maior (08:00-20:00, sem intervalo) -> mesmo prazo em DIAS úteis
+  // vence mais rápido em horas de relógio do que o perfil padrão (525min/dia).
+  const perfilExpedienteLongo = {
+    ownerTeam: "Equipe Plantão",
+    thresholdBusinessDays: 1,
+    schedule: { morningStart: 8 * 60, morningEnd: 12 * 60, afternoonStart: 12 * 60, afternoonEnd: 20 * 60 },
+  };
+  // 1 dia útil neste perfil = 720min (12h). Referência: seg 08:00 local (11:00 UTC).
+  const ticket = {
+    id: 10,
+    subject: "Chamado plantão",
+    status: "Aguardando Retorno do Cliente",
+    ownerTeam: "Equipe Plantão",
+    owner: { id: "007-owner" },
+    actions: [{ createdDate: "2026-04-06T11:00:00Z", createdBy: { id: "007-owner" } }], // seg 08:00 local
+    statusHistories: [{ status: "Aguardando Retorno do Cliente", changedDate: "2026-04-06T11:00:00Z" }],
+  };
+  // Antes de completar 12h úteis (mesmo dia, 19:00 local = 22:00 UTC) -> ainda não vence.
+  assert.equal(
+    evaluateTicket(ticket, perfilExpedienteLongo, new Date("2026-04-06T21:00:00Z")).action,
+    "skipped_within_threshold",
+  );
+  // Depois de completar (terça 08:01 local) -> vence.
+  assert.equal(evaluateTicket(ticket, perfilExpedienteLongo, new Date("2026-04-07T11:01:00Z")).action, "charged");
+});
+
+test("followUpProfiles: CRUD completo persiste em disco e valida a janela de expediente", async () => {
+  const dir = "./data/followup-profiles-test";
+  rmSync(dir, { recursive: true, force: true });
+
+  // Primeira leitura semeia um perfil padrão (compatibilidade com quem já usava as
+  // variáveis de ambiente antigas de uma única equipe).
+  const seeded = await listFollowUpProfiles();
+  assert.equal(seeded.length, 1);
+  assert.equal(seeded[0]?.ownerTeam, "VIASOFT - Sistemas Internos");
+
+  const input = {
+    name: "Equipe Teste",
+    ownerTeam: "VIASOFT - Equipe Teste",
+    enabled: true,
+    waitingStatuses: ["Aguardando Retorno do Cliente"],
+    thresholdBusinessDays: 2,
+    checkIntervalHours: 12,
+    reminderSenderId: "999",
+    reminderSenderName: "Alex Fable",
+    schedule: { morningStart: 480, morningEnd: 720, afternoonStart: 780, afternoonEnd: 1080 },
+  };
+  const created = await createFollowUpProfile(input);
+  assert.ok(created.id);
+  assert.equal((await listFollowUpProfiles()).length, 2);
+
+  const updated = await updateFollowUpProfile(created.id, { ...input, thresholdBusinessDays: 5 });
+  assert.equal(updated.thresholdBusinessDays, 5);
+  assert.equal(updated.id, created.id);
+
+  await deleteFollowUpProfile(created.id);
+  assert.equal((await listFollowUpProfiles()).length, 1);
+
+  await assert.rejects(() => deleteFollowUpProfile(created.id)); // já foi apagado
+
+  // Janela de expediente inválida (fim antes do início) é rejeitada antes de gravar.
+  await assert.rejects(() =>
+    createFollowUpProfile({ ...input, schedule: { ...input.schedule, morningEnd: 100 } }),
+  );
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("painel: API /api/followup/profiles faz CRUD via HTTP (aba Automação)", async () => {
+  // Reutiliza o mesmo arquivo de FOLLOWUP_PROFILES_FILE do teste anterior (fixado em
+  // test/setupEnv.ts) — o valor é lido uma única vez no import do módulo, então não dá
+  // pra trocar por variável de ambiente aqui em runtime.
+  const dir = "./data/followup-profiles-test";
+  rmSync(dir, { recursive: true, force: true });
+
+  const fakeSession = { async send(text: string) { return "ok: " + text; } } as any;
+  const dashboard = startDashboardServer(fakeSession, 4596);
+  try {
+    const listRes = await fetch(dashboard.url + "/api/followup/profiles");
+    assert.equal(listRes.status, 200);
+    const listBody = (await listRes.json()) as any;
+    assert.equal(listBody.profiles.length, 1); // perfil-semente
+    assert.equal(typeof listBody.automationEnabled, "boolean");
+
+    const createRes = await fetch(dashboard.url + "/api/followup/profiles", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: "Equipe HTTP",
+        ownerTeam: "VIASOFT - Equipe HTTP",
+        enabled: true,
+        waitingStatuses: ["Aguardando Retorno do Cliente"],
+        thresholdBusinessDays: 2,
+        checkIntervalHours: 6,
+        reminderSenderId: "123",
+        reminderSenderName: "Alex Fable",
+        schedule: { morningStart: 480, morningEnd: 720, afternoonStart: 780, afternoonEnd: 1080 },
+      }),
+    });
+    assert.equal(createRes.status, 201);
+    const created = (await createRes.json()) as any;
+    assert.equal(created.ownerTeam, "VIASOFT - Equipe HTTP");
+
+    const putRes = await fetch(dashboard.url + "/api/followup/profiles/" + created.id, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...created, enabled: false }),
+    });
+    assert.equal(putRes.status, 200);
+    const updated = (await putRes.json()) as any;
+    assert.equal(updated.enabled, false);
+
+    const delRes = await fetch(dashboard.url + "/api/followup/profiles/" + created.id, { method: "DELETE" });
+    assert.equal(delRes.status, 204);
+
+    const afterDelete = (await (await fetch(dashboard.url + "/api/followup/profiles")).json()) as any;
+    assert.equal(afterDelete.profiles.length, 1);
+
+    // Rodar manualmente um perfil quando o gate global está desligado -> 409, não busca nada.
+    const runRes = await fetch(dashboard.url + "/api/followup/profiles/" + afterDelete.profiles[0].id + "/run", {
+      method: "POST",
+    });
+    assert.equal(runRes.status, 409);
+  } finally {
+    await dashboard.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

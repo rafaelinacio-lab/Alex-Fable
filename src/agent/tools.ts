@@ -35,8 +35,8 @@ import { idempotencyGet, idempotencyPut, idempotencyReserve } from "../store/ide
 import { emitEvent, newEventId, sanitizeForDashboard } from "../observability/eventBus.js";
 import { exportRowsToExcel } from "../local/export.js";
 import { exportRowsToPdf, PDF_MAX_ROWS } from "../local/pdfExport.js";
-import { runFollowUpCheck } from "./followUp.js";
-import { FOLLOW_UP_CONFIG } from "../config/followUp.js";
+import { runAllFollowUpChecks } from "./followUp.js";
+import { isFollowUpAutomationEnabled } from "../config/followUp.js";
 import path from "node:path";
 
 export interface AgentContext {
@@ -210,7 +210,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   movidesk_get_person: "Busca uma pessoa Movidesk por cod_ref.",
   movidesk_search_persons: "Busca pessoas Movidesk via OData. $select é obrigatório.",
   check_pending_customer_tickets:
-    "Roda AGORA (fora do agendamento automático de 24h) a verificação de chamados 'Aguardando Retorno do Cliente'/'Aguardando Validação do Cliente' há tempo demais (regra completa em src/agent/followUp.ts: última ação tem que ser do owner, prazo em horas úteis conforme o SLA). Chamados que qualificam recebem uma ação pública automática de cobrança nesta mesma chamada — não é só uma prévia. Só faz sentido se FOLLOWUP_AUTOMATION_ENABLED=true (senão devolve checkedCount:0 sem buscar nada). Use quando o usuário pedir explicitamente para checar/cobrar agora, fora do ciclo automático.",
+    "Roda AGORA (fora do agendamento automático) a verificação de cobrança para TODAS as equipes com um perfil habilitado no painel (aba Automação) — cada perfil tem sua própria equipe, status monitorados e regra de SLA (ver src/agent/followUp.ts: última ação tem que ser do owner, prazo em horas úteis conforme o expediente configurado naquele perfil). Chamados que qualificam recebem uma ação pública automática de cobrança nesta mesma chamada — não é só uma prévia. Só faz sentido se FOLLOWUP_AUTOMATION_ENABLED=true E houver ao menos um perfil habilitado (senão devolve results:[] sem buscar nada). Use quando o usuário pedir explicitamente para checar/cobrar agora, fora do ciclo automático.",
   movidesk_get_service: "Busca um serviço Movidesk por ID.",
   movidesk_search_services: "Busca serviços Movidesk via OData. $select é obrigatório.",
 };
@@ -544,16 +544,17 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
       });
 
     case "check_pending_customer_tickets": {
-      if (!FOLLOW_UP_CONFIG.enabled) {
+      if (!isFollowUpAutomationEnabled()) {
         return {
-          checkedCount: 0,
-          charged: [],
-          skipped: [],
-          errors: [],
+          results: [],
           note: "FOLLOWUP_AUTOMATION_ENABLED não está 'true' — a automação de cobrança está desligada, nada foi verificado.",
         };
       }
-      return runFollowUpCheck();
+      const results = await runAllFollowUpChecks();
+      if (results.length === 0) {
+        return { results: [], note: "Nenhum perfil de equipe está habilitado (enabled) no painel — nada foi verificado." };
+      }
+      return { results };
     }
 
     case "movidesk_get_service":

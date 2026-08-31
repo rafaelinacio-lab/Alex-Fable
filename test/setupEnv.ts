@@ -5,3 +5,5 @@
  * dos módulos seguintes.
  */
 process.env.MOVIDESK_TOKEN ??= "test-token-nao-real";
+// Isola o arquivo de perfis da automação de cobrança do arquivo real usado em dev/produção.
+process.env.FOLLOWUP_PROFILES_FILE ??= "./data/followup-profiles-test/perfis.json";

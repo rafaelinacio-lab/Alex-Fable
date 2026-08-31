@@ -102,8 +102,10 @@ Só o módulo `src/movidesk/client.ts` lê `MOVIDESK_TOKEN` do ambiente.
   pelo navegador (painel web).
 - Rodar sozinho, em segundo plano, verificando chamados "Aguardando Retorno do
   Cliente"/"Aguardando Validação do Cliente" com a última ação do owner há tempo
-  demais (horas úteis, calendário do SLA), e publicar uma cobrança automática — ver
-  seção 6.1. Desligado por padrão (`FOLLOWUP_AUTOMATION_ENABLED`).
+  demais (horas úteis, na janela de SLA de cada equipe), e publicar uma cobrança
+  automática — em uma ou várias equipes, cada uma com sua própria regra, configuráveis
+  pelo painel (aba "Automação") — ver seção 6.1. Desligado por padrão
+  (`FOLLOWUP_AUTOMATION_ENABLED`).
 
 ## 5. Contrato de ferramentas (resumo)
 
@@ -122,7 +124,10 @@ Especificação completa na seção 4 do prompt de sistema. Categorias:
   busca), `export_tickets_to_excel`/`export_tickets_to_pdf` (só para linhas pequenas que
   o modelo já tem prontas, até 200). PDF tem limite bem menor (5.000 linhas) que Excel.
 - **Automação**: `check_pending_customer_tickets` (roda na hora a verificação de
-  cobrança automática — sem parâmetros; ver seção 6.1).
+  cobrança automática para todos os perfis/equipes habilitados no painel — sem
+  parâmetros; ver seção 6.1). A configuração dos perfis em si (criar/editar/excluir
+  equipe, ajustar SLA) não é uma ferramenta do modelo — é feita pelo painel web
+  (API `/api/followup/profiles`, aba "Automação").
 
 Toda ferramenta tem schema validado (`zod`) em `src/agent/tools.ts` — o modelo nunca
 manda JSON solto direto para a API; o schema rejeita antes.
@@ -144,38 +149,55 @@ Para consultas livres (ex: "chamados da organização X") que não pertencem a u
 fixo, o agente usa `movidesk_search_organizations` + `movidesk_search_tickets_exhaustive`
 diretamente contra a API, sem depender de catálogo.
 
-### 6.1 Cobrança automática de retorno do cliente
+### 6.1 Cobrança automática de retorno do cliente (por perfil/equipe)
 
-Implementação: `src/agent/followUp.ts` (regra pura, `evaluateTicket`/`runFollowUpCheck`),
-`src/agent/followUpScheduler.ts` (`setInterval` gated por `FOLLOW_UP_CONFIG.enabled`,
-ligado em `src/agent/cli.ts`), `src/config/followUp.ts` (configuração/gate),
-`src/movidesk/businessHours.ts` (cálculo de horas úteis pelo calendário do SLA).
+Implementação: `src/agent/followUp.ts` (regra pura por perfil — `evaluateTicket`/
+`runFollowUpCheck`/`runAllFollowUpChecks`), `src/config/followUpProfiles.ts` (perfis —
+CRUD em arquivo JSON, um por equipe, com validação da janela de expediente),
+`src/agent/followUpScheduler.ts` (tick periódico que decide quais perfis já venceram o
+próprio intervalo), `src/config/followUp.ts` (interruptor geral/mensagem),
+`src/movidesk/businessHours.ts` (cálculo de horas úteis, agora parametrizado por
+`schedule` — cada perfil pode ter uma janela de expediente diferente).
 
-**Regra** (confirmada com o usuário): restrita à equipe `FOLLOWUP_OWNER_TEAM` (padrão
-"VIASOFT - Sistemas Internos" — mesmo `ownerTeam` do fluxo `sistemas_internos`), filtrada
-tanto no `$filter` OData quanto de novo localmente em `evaluateTicket` (defesa em
-profundidade, mesmo padrão já usado para `only_open`). Dentro dessa equipe, um chamado em
-"Aguardando Retorno do Cliente" ou "Aguardando Validação do Cliente" é cobrado quando a
-última ação foi do `owner` (não do
-cliente — indica silêncio real, não resposta ainda não refletida no status) E o tempo
-decorrido desde a mais recente entre essa ação e a entrada no status atual
-(`statusHistories`) passa de `FOLLOWUP_THRESHOLD_BUSINESS_DAYS` (padrão 3), contado em
-horas úteis (seg-sex 07:45-12:00 e 13:30-18:00 — não dias corridos). A cobrança é
-publicada por uma identidade dedicada (`FOLLOWUP_SENDER_COD_REF`), nunca pelo owner
-individual — o que também torna a cobrança idempotente por rodada: como o remetente
-passa a ser essa identidade, na rodada seguinte a condição "última ação é do owner" já
-não bate mais para aquele chamado, então ele não é cobrado de novo pelo mesmo silêncio.
+**Motivação da mudança para perfis**: a versão original tinha uma única configuração fixa
+(uma equipe, uma janela de SLA) só em variáveis de ambiente. O usuário pediu para
+configurar isso pelo painel e poder ter várias equipes com SLAs diferentes no futuro —
+por isso a configuração por equipe virou um array de "perfis" persistido e editável via
+API (`/api/followup/profiles`, aba "Automação" do painel), em vez de env vars fixas.
 
-Roda sozinho a cada `FOLLOWUP_CHECK_INTERVAL_HOURS` (padrão 24h) enquanto o processo do
-agente estiver de pé (mais uma vez logo na subida), com o resumo de cada rodada anunciado
-na aba "Conversa" do painel como mensagem de sistema (`dashboard.announceSystemMessage`,
-não passa pelo modelo). Duas buscas separadas (uma por status monitorado) em vez de um
-único filtro com `or`, pelo mesmo motivo da seção 8.11 (operadores não confirmados).
+**Regra** (confirmada com o usuário), aplicada dentro de CADA perfil: restrita à equipe
+(`ownerTeam`) daquele perfil, filtrada tanto no `$filter` OData quanto de novo localmente
+em `evaluateTicket` (defesa em profundidade, mesmo padrão já usado para `only_open`).
+Dentro dessa equipe, um chamado no status monitorado por aquele perfil (padrão:
+"Aguardando Retorno do Cliente"/"Aguardando Validação do Cliente") é cobrado quando a
+última ação foi do `owner` (não do cliente — indica silêncio real, não resposta ainda não
+refletida no status) E o tempo decorrido desde a mais recente entre essa ação e a entrada
+no status atual (`statusHistories`) passa do prazo (dias úteis) configurado NAQUELE
+perfil, contado pela JANELA DE EXPEDIENTE PRÓPRIA dele (`profile.schedule` — não uma
+constante global; `businessDaysToMinutes`/`businessMinutesElapsed` recebem o schedule do
+perfil). A cobrança é publicada pela identidade configurada no perfil, nunca pelo owner
+individual — o que também torna a cobrança idempotente por rodada: como o remetente passa
+a ser essa identidade, na rodada seguinte a condição "última ação é do owner" já não bate
+mais para aquele chamado, então ele não é cobrado de novo pelo mesmo silêncio.
+
+O agendador (`followUpScheduler.ts`) não usa mais um único `setInterval` do tamanho do
+intervalo antigo — como cada perfil pode ter um `checkIntervalHours` diferente, ele "bate"
+(tick) com frequência fixa e curta (`FOLLOWUP_TICK_MINUTES`, padrão 15min) e, a cada
+batida, roda só os perfis cujo `lastRunAt + checkIntervalHours` já venceu (ou que nunca
+rodaram). `lastRunAt` é persistido no próprio arquivo de perfis
+(`markFollowUpProfileRan`). O resumo de cada rodada é anunciado na aba "Conversa" do
+painel como mensagem de sistema (`dashboard.announceSystemMessage`, não passa pelo
+modelo), prefixado com `[nome do perfil / equipe]`. Duas buscas separadas por perfil (uma
+por status monitorado) em vez de um único filtro com `or`, pelo mesmo motivo da seção
+8.11 (operadores não confirmados).
 
 **Desligado por padrão** (`FOLLOWUP_AUTOMATION_ENABLED=false`) — é uma mutação autônoma
-que fala com clientes reais sem revisão humana, então puxar código novo nunca deve ligar
-isso sozinho; exige opt-in explícito no `.env`. O mesmo gate vale para o disparo manual
-via ferramenta `check_pending_customer_tickets`.
+que fala com clientes reais sem revisão humana, então puxar código novo (ou criar um
+perfil novo pelo painel) nunca deve ligar isso sozinho; exige opt-in explícito no `.env`.
+Esse gate é GERAL — nenhum perfil roda enquanto ele não for `true`, mesmo que o perfil
+individual esteja `enabled: true`. O mesmo gate vale para o disparo manual via ferramenta
+`check_pending_customer_tickets` (roda todos os perfis habilitados) e para o botão
+"Rodar agora" de cada card na aba "Automação" (roda só aquele perfil).
 
 ## 7. Segurança e auditoria
 
@@ -284,7 +306,25 @@ Registro do que já foi corrigido, para não reintroduzir os mesmos problemas:
     executa uma mutação real (ação pública em chamado) sem revisão humana e sem gatilho
     de conversa — por isso ganhou um gate de ambiente dedicado
     (`FOLLOWUP_AUTOMATION_ENABLED`, desligado por padrão) que nenhuma outra ferramenta
-    deste projeto precisou até aqui.
+    deste projeto precisou até aqui. Em seguida veio a restrição a uma única equipe
+    (`VIASOFT - Sistemas Internos`), validada em duas camadas ($filter OData + checagem
+    local em `evaluateTicket`, mesmo padrão de `only_open`).
+16. **Configuração por perfil, pelo painel** (ver seção 6.1): o usuário pediu para
+    configurar a equipe e a regra de SLA pelo painel em vez de variável de ambiente,
+    prevendo que no futuro outras equipes com SLAs diferentes da de Sistemas Internos
+    vão precisar da mesma automação. A configuração de uma única equipe fixa
+    (`FOLLOWUP_OWNER_TEAM`/`FOLLOWUP_THRESHOLD_BUSINESS_DAYS`/etc.) virou um array de
+    "perfis" (`src/config/followUpProfiles.ts`) — CRUD completo via API HTTP
+    (`/api/followup/profiles`) e uma aba nova no painel ("Automação"), com um perfil
+    semeado automaticamente na primeira execução (mesmos valores que eram fixos antes,
+    para não mudar o comportamento de quem já tinha isso configurado). A janela de
+    expediente (`businessHours.ts`) deixou de ser uma constante única e passou a ser um
+    parâmetro (`schedule`) — cada perfil pode ter seu próprio SLA de horário, não só um
+    prazo em dias diferente. O agendador (`followUpScheduler.ts`) deixou de ter um único
+    `setInterval` do tamanho do intervalo (que só fazia sentido para uma configuração) e
+    passou a "bater" (tick) com frequência curta e fixa, decidindo a cada batida quais
+    perfis já venceram o próprio intervalo — necessário porque perfis diferentes podem
+    ter intervalos diferentes.
 
 ## 9. Limitações conhecidas
 

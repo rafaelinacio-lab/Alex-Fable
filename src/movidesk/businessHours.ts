@@ -35,9 +35,13 @@ export const SLA_SCHEDULE: BusinessSchedule = {
   afternoonEnd: 18 * 60, // 1080
 };
 
-/** Minutos úteis num dia cheio de expediente: (720-465) + (1080-810) = 525min = 8h45min. */
-export const BUSINESS_MINUTES_PER_DAY =
-  SLA_SCHEDULE.morningEnd - SLA_SCHEDULE.morningStart + (SLA_SCHEDULE.afternoonEnd - SLA_SCHEDULE.afternoonStart);
+/** Minutos úteis num dia cheio de expediente, dada uma janela. */
+export function minutesPerBusinessDay(schedule: BusinessSchedule): number {
+  return schedule.morningEnd - schedule.morningStart + (schedule.afternoonEnd - schedule.afternoonStart);
+}
+
+/** Minutos úteis num dia cheio de expediente PADRÃO deste tenant: (720-465) + (1080-810) = 525min = 8h45min. */
+export const BUSINESS_MINUTES_PER_DAY = minutesPerBusinessDay(SLA_SCHEDULE);
 
 /** America/Sao_Paulo, UTC-3 fixo (sem horário de verão desde 2019). Ajuste se o tenant for outro fuso. */
 export const TIMEZONE_OFFSET_MINUTES = -3 * 60;
@@ -116,7 +120,12 @@ export function businessMinutesElapsed(
   return minutes;
 }
 
-/** Quantos minutos úteis correspondem a N "dias úteis" cheios (N × 8h45min neste tenant). */
-export function businessDaysToMinutes(days: number): number {
-  return days * BUSINESS_MINUTES_PER_DAY;
+/**
+ * Quantos minutos úteis correspondem a N "dias úteis" cheios, dada uma janela de
+ * expediente (padrão: a deste tenant, SLA_SCHEDULE). Perfis com expediente diferente
+ * (ver src/config/followUpProfiles.ts) devem passar seu próprio `schedule` aqui — "3
+ * dias úteis" significa coisas diferentes para equipes com janelas diferentes.
+ */
+export function businessDaysToMinutes(days: number, schedule: BusinessSchedule = SLA_SCHEDULE): number {
+  return days * minutesPerBusinessDay(schedule);
 }
