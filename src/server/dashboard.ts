@@ -29,7 +29,10 @@ import {
   type FollowUpProfileInput,
 } from "../config/followUpProfiles.js";
 import { runFollowUpCheck } from "../agent/followUp.js";
-import { isFollowUpAutomationEnabled } from "../config/followUp.js";
+import { runAutoCloseCheck } from "../agent/followUpClose.js";
+import { isFollowUpAutomationEnabled, isFollowUpAutoCloseEnabled } from "../config/followUp.js";
+import { listCharges } from "../store/followUpCharges.js";
+import { addBusinessMinutes } from "../movidesk/businessHours.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DASHBOARD_HTML_PATH = path.join(__dirname, "..", "..", "public", "dashboard.html");
@@ -161,6 +164,38 @@ export function startDashboardServer(
     function json(status: number, body: unknown): void {
       res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
       res.end(JSON.stringify(body));
+    }
+
+    if (parts[2] === "charges") {
+      if (parts[3] === "run-close" && method === "POST") {
+        const result = await runAutoCloseCheck();
+        if (result.checkedCount > 0) {
+          announceSystemMessage(
+            `[Fechamento automático] Verificação manual concluída pelo painel. ` +
+              `Chamados cobrados verificados: ${result.checkedCount}. Fechados: ${result.closed.length}.`,
+          );
+        }
+        json(200, result);
+        return;
+      }
+      if (!parts[3] && method === "GET") {
+        const charges = await listCharges();
+        const withDeadline = charges.map((c) => ({
+          ...c,
+          // Informativo mesmo quando o fechamento automático está desligado (mostra "seria
+          // fechado em..." mas o painel deve deixar claro que isso não vai acontecer sozinho).
+          deadlineAt:
+            c.status === "pending"
+              ? addBusinessMinutes(new Date(c.chargedAt), c.thresholdBusinessHours * 60, {
+                  schedule: c.schedule,
+                }).toISOString()
+              : undefined,
+        }));
+        json(200, { charges: withDeadline, autoCloseEnabled: isFollowUpAutoCloseEnabled() });
+        return;
+      }
+      json(404, { error: "rota não encontrada" });
+      return;
     }
 
     if (parts[2] !== "profiles") {

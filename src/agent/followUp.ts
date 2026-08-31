@@ -50,6 +50,7 @@ import { businessMinutesElapsed } from "../movidesk/businessHours.js";
 import { buildFollowUpMessage, isFollowUpAutomationEnabled } from "../config/followUp.js";
 import { listFollowUpProfiles, markFollowUpProfileRan, type FollowUpProfile } from "../config/followUpProfiles.js";
 import { recordAuditEvent, hashPayload, newCorrelationId } from "../store/audit.js";
+import { recordCharge } from "../store/followUpCharges.js";
 import { emitEvent, newEventId } from "../observability/eventBus.js";
 import { MovideskApiError } from "../movidesk/client.js";
 
@@ -177,8 +178,9 @@ export function evaluateTicket(
 }
 
 async function chargeTicket(
+  ticket: TicketSummary,
   result: FollowUpTicketResult,
-  profile: Pick<FollowUpProfile, "reminderSenderId">,
+  profile: Pick<FollowUpProfile, "id" | "name" | "reminderSenderId" | "thresholdBusinessHours" | "schedule">,
 ): Promise<FollowUpTicketResult> {
   const payload = {
     actions: [
@@ -203,6 +205,30 @@ async function chargeTicket(
       httpStatus: 200,
       changedFields: ["actions"],
     });
+    // Rastreamento para o painel (aba "Cobranças") e para o fechamento automático saber
+    // quando o prazo começou a contar — ver src/store/followUpCharges.ts. Isolado num
+    // try/catch próprio: uma falha AQUI não pode fazer a cobrança (que já foi enviada de
+    // verdade ao cliente, GET/PATCH acima já teve sucesso) aparecer como erro — mesma
+    // lição do bug de corpo vazio em client.ts (nunca reportar sucesso real como falha).
+    try {
+      await recordCharge({
+        ticketId: result.id,
+        profileId: profile.id,
+        profileName: profile.name,
+        subject: result.subject,
+        ownerTeam: ticket.ownerTeam,
+        ownerId: ticket.owner?.id,
+        chargedAt: new Date().toISOString(),
+        thresholdBusinessHours: profile.thresholdBusinessHours,
+        schedule: profile.schedule,
+        reminderSenderId: profile.reminderSenderId,
+      });
+    } catch (trackErr) {
+      console.error(
+        `followUp: falha ao registrar rastreamento da cobrança do #${result.id} (a cobrança em si foi enviada normalmente):`,
+        trackErr,
+      );
+    }
     return result;
   } catch (err) {
     const errorCode = err instanceof MovideskApiError ? `movidesk:${err.status}:${err.propertyName ?? ""}` : "unknown";
@@ -339,7 +365,7 @@ export async function runFollowUpCheck(profile: FollowUpProfile): Promise<Follow
   for (const ticket of allTickets) {
     const evaluation = evaluateTicket(ticket, profile, now);
     if (evaluation.action === "charged") {
-      const chargeResult = await chargeTicket(evaluation, profile);
+      const chargeResult = await chargeTicket(ticket, evaluation, profile);
       (chargeResult.action === "charged" ? charged : errors).push(chargeResult);
     } else {
       skipped.push(evaluation);

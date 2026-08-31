@@ -16,9 +16,10 @@
  * projeto (cartões de arquivo, atividade em tempo real).
  */
 
-import { isFollowUpAutomationEnabled } from "../config/followUp.js";
+import { isFollowUpAutomationEnabled, isFollowUpAutoCloseEnabled } from "../config/followUp.js";
 import { listFollowUpProfiles, type FollowUpProfile } from "../config/followUpProfiles.js";
 import { runFollowUpCheck, describeScope, type FollowUpRunResult } from "./followUp.js";
+import { runAutoCloseCheck, type AutoCloseRunResult } from "./followUpClose.js";
 
 export interface FollowUpScheduler {
   stop(): void;
@@ -47,6 +48,24 @@ function summarize(result: FollowUpRunResult): string {
   }
   if (result.diagnostics?.length) {
     lines.push("🔎 " + result.diagnostics.join(" "));
+  }
+  return lines.join(" ");
+}
+
+function summarizeAutoClose(result: AutoCloseRunResult): string | undefined {
+  if (result.checkedCount === 0) return undefined; // gate desligado ou nada pendente — não polui a aba Conversa
+  const lines = [`[Fechamento automático] Chamados cobrados verificados: ${result.checkedCount}.`];
+  if (result.closed.length > 0) {
+    lines.push(`Fechados agora (${result.closed.length}): ` + result.closed.map((c) => `#${c.ticketId}`).join(", ") + ".");
+  } else {
+    lines.push("Nenhum precisou ser fechado nesta rodada.");
+  }
+  if (result.errors.length > 0) {
+    lines.push(
+      `⚠ Falha ao fechar ${result.errors.length} chamado(s): ` +
+        result.errors.map((e) => `#${e.ticketId} (${e.errorMessage})`).join("; ") +
+        ".",
+    );
   }
   return lines.join(" ");
 }
@@ -94,6 +113,18 @@ export function startFollowUpScheduler(announce: (text: string) => void): Follow
           `⚠ Verificação automática de cobrança falhou para "${profile.name}" (${describeScope(profile)}): ${err instanceof Error ? err.message : String(err)}`,
         );
       }
+    }
+
+    // Fechamento automático: roda TODA batida (não só quando um perfil vence seu próprio
+    // intervalo) — os prazos são por CHAMADO já cobrado, não por perfil. A função em si
+    // já tem seu próprio gate (global + por perfil) e devolve checkedCount 0 sem fazer
+    // nada quando desligada, então chamar sempre é seguro e barato.
+    try {
+      const closeResult = await runAutoCloseCheck();
+      const summary = summarizeAutoClose(closeResult);
+      if (summary) announce(summary);
+    } catch (err) {
+      announce(`⚠ Verificação de fechamento automático falhou: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

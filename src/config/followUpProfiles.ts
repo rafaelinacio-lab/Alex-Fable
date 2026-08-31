@@ -66,6 +66,13 @@ export interface FollowUpProfile {
    * exatos como 24 (confirmado com o usuário) em vez de uma aproximação em dias úteis
    * cheios (24h úteis não é um número redondo de dias úteis num expediente de 8h45). */
   thresholdBusinessHours: number;
+  /** Fechar sozinho (status "Resolvido") um chamado já cobrado, se ninguém responder
+   * dentro do MESMO `thresholdBusinessHours` (contado a partir da cobrança, não do
+   * silêncio original). Padrão false — é uma mutação mais sensível que só cobrar (não dá
+   * pra desfazer com uma mensagem), então exige opt-in explícito por perfil, ALÉM do gate
+   * global `FOLLOWUP_AUTOCLOSE_ENABLED` (ver src/config/followUp.ts). Ver
+   * src/agent/followUpClose.ts. */
+  autoCloseEnabled: boolean;
   checkIntervalHours: number;
   reminderSenderId: string;
   reminderSenderName: string;
@@ -88,6 +95,7 @@ export type FollowUpProfileInput = Pick<
   | "waitingStatuses"
   | "waitingJustifications"
   | "thresholdBusinessHours"
+  | "autoCloseEnabled"
   | "checkIntervalHours"
   | "reminderSenderId"
   | "reminderSenderName"
@@ -127,6 +135,9 @@ function seedProfile(): FollowUpProfile {
     // 24h úteis: regra confirmada com o usuário (2026-08-31) — cobra quando a última ação
     // foi do owner e nenhum cliente do ticket respondeu há mais de 24 HORAS ÚTEIS.
     thresholdBusinessHours: Number(process.env.FOLLOWUP_THRESHOLD_BUSINESS_HOURS ?? 24),
+    // Seguro por padrão — fechar sozinho é opt-in explícito (painel + gate global), nunca
+    // ligado automaticamente só por existir o perfil.
+    autoCloseEnabled: false,
     checkIntervalHours: Number(process.env.FOLLOWUP_CHECK_INTERVAL_HOURS ?? 24),
     reminderSenderId: process.env.FOLLOWUP_SENDER_COD_REF ?? "007",
     reminderSenderName: "Alex Fable",

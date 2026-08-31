@@ -317,6 +317,27 @@
     font-size: 13px !important; color: var(--text) !important; cursor: pointer;
   }
   .radio-inline input { width: auto; }
+
+  /* --- aba "Cobranças" --- */
+  #chargesView { padding: 4px 4px 24px; }
+  .charge-card {
+    background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 10px;
+  }
+  .charge-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .charge-title { font-weight: 600; font-size: 14px; }
+  .charge-sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .charge-badge {
+    font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px; white-space: nowrap;
+    border: 1px solid var(--panel-border); color: var(--muted);
+  }
+  .charge-badge.pending { border-color: var(--accent); color: var(--accent); }
+  .charge-badge.closed { border-color: var(--ok); color: var(--ok); }
+  .charge-badge.responded { border-color: var(--ok); color: var(--ok); }
+  .charge-badge.error, .charge-badge.closed_error { border-color: var(--err); color: var(--err); }
+  .charge-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .charge-meta b { color: var(--text); font-weight: 600; }
+  .charge-countdown { font-variant-numeric: tabular-nums; }
   .form-error { color: var(--err); font-size: 12px; margin-top: 8px; }
 </style>
 </head>
@@ -333,6 +354,7 @@
   <button data-tab="activity" class="active">Atividade</button>
   <button data-tab="chat">Conversa</button>
   <button data-tab="automation">Automação</button>
+  <button data-tab="charges">Cobranças</button>
 </div>
 
 <div id="activityView" class="view active">
@@ -372,6 +394,17 @@
   </div>
   <div id="profileFormWrap"></div>
   <div id="profilesList"></div>
+</div>
+
+<div id="chargesView" class="view">
+  <div id="autoCloseGateBanner" class="gate-banner"></div>
+  <div class="profiles-toolbar">
+    <div class="sub" style="color:var(--muted); font-size:12px;">
+      Chamados que já receberam a cobrança automática — e, quando o fechamento automático está ligado, quanto falta até serem encerrados por falta de retorno.
+    </div>
+    <button class="btn" id="refreshChargesBtn">Atualizar</button>
+  </div>
+  <div id="chargesList"></div>
 </div>
 
 <script>
@@ -583,6 +616,8 @@
         chatLog.scrollTop = chatLog.scrollHeight;
       } else if (btn.dataset.tab === "automation") {
         loadFollowUpProfiles();
+      } else if (btn.dataset.tab === "charges") {
+        loadCharges();
       }
     });
   });
@@ -767,6 +802,8 @@
         '<div class="profile-actions">' +
         '<label class="switch" title="Habilitado"><input type="checkbox" ' + (p.enabled ? "checked" : "") +
         ' data-action="toggle" data-id="' + p.id + '"><span class="slider"></span></label>' +
+        '<label class="switch" title="Fechar automaticamente sem retorno"><input type="checkbox" ' + (p.autoCloseEnabled ? "checked" : "") +
+        ' data-action="toggle-autoclose" data-id="' + p.id + '"><span class="slider"></span></label>' +
         '<button class="btn" data-action="run" data-id="' + p.id + '">Rodar agora</button>' +
         '<button class="btn" data-action="edit" data-id="' + p.id + '">Editar</button>' +
         '<button class="btn danger" data-action="delete" data-id="' + p.id + '">Excluir</button>' +
@@ -777,6 +814,7 @@
           ? "<span>Justificativas: <b>" + escapeHtml(p.waitingJustifications.join(", ")) + "</b></span>"
           : "") +
         "<span>Prazo: <b>" + p.thresholdBusinessHours + "h útil(eis)</b></span>" +
+        "<span>Fechamento automático: <b>" + (p.autoCloseEnabled ? "ligado" : "desligado") + "</b></span>" +
         "<span>Expediente: <b>" + minutesToHHMM(p.schedule.morningStart) + "–" + minutesToHHMM(p.schedule.morningEnd) +
         " e " + minutesToHHMM(p.schedule.afternoonStart) + "–" + minutesToHHMM(p.schedule.afternoonEnd) + "</b></span>" +
         "<span>Verifica a cada <b>" + p.checkIntervalHours + "h</b></span>" +
@@ -792,7 +830,7 @@
     if (!btn) return;
     const id = btn.dataset.id;
     const action = btn.dataset.action;
-    if (action === "toggle") return; // tratado no listener "change" abaixo
+    if (action === "toggle" || action === "toggle-autoclose") return; // tratado no listener "change" abaixo
     if (action === "delete") {
       if (!confirm("Excluir este perfil? A equipe deixa de ser verificada.")) return;
       await fetch("/api/followup/profiles/" + id, { method: "DELETE" });
@@ -825,16 +863,28 @@
   });
 
   profilesList.addEventListener("change", async (e) => {
-    if (e.target.dataset.action !== "toggle") return;
+    const action = e.target.dataset.action;
+    if (action !== "toggle" && action !== "toggle-autoclose") return;
     const id = e.target.dataset.id;
+    if (action === "toggle-autoclose" && e.target.checked) {
+      if (!confirm(
+        "Isso permite que o agente ENCERRE chamados sozinho (status Resolvido), sem revisão humana, " +
+        "quando ninguém responder à cobrança dentro do prazo. Também exige FOLLOWUP_AUTOCLOSE_ENABLED=true " +
+        "no .env — sem isso, nada é fechado mesmo com este perfil marcado. Confirma?"
+      )) {
+        e.target.checked = false;
+        return;
+      }
+    }
     const res = await fetch("/api/followup/profiles");
     const data = await res.json();
     const profile = data.profiles.find((p) => p.id === id);
     if (!profile) return;
+    const patch = action === "toggle" ? { enabled: e.target.checked } : { autoCloseEnabled: e.target.checked };
     await fetch("/api/followup/profiles/" + id, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...profile, enabled: e.target.checked }),
+      body: JSON.stringify({ ...profile, ...patch }),
     });
     loadFollowUpProfiles();
   });
@@ -913,6 +963,7 @@
         ownerId: scopeType === "owner" ? wrap.querySelector("#pf-ownerid").value.trim() : undefined,
         ownerName: scopeType === "owner" ? wrap.querySelector("#pf-ownername").value.trim() : undefined,
         enabled: v.enabled,
+        autoCloseEnabled: !!v.autoCloseEnabled, // criação sempre começa desligado; ligar é só pelo switch da lista (com confirmação)
         waitingStatuses: wrap.querySelector("#pf-statuses").value.split(",").map((s) => s.trim()).filter(Boolean),
         waitingJustifications: wrap.querySelector("#pf-justifications").value.split(",").map((s) => s.trim()).filter(Boolean),
         thresholdBusinessHours: Number(wrap.querySelector("#pf-threshold").value),
@@ -947,6 +998,100 @@
   function escapeAttr(s) {
     return escapeHtml(s).replace(/"/g, "&quot;");
   }
+
+  // --- aba "Cobranças" (chamados que já receberam a ação automática) ---
+  const chargesList = document.getElementById("chargesList");
+  const autoCloseGateBanner = document.getElementById("autoCloseGateBanner");
+  const refreshChargesBtn = document.getElementById("refreshChargesBtn");
+  let latestCharges = [];
+  let chargesCountdownTimer = null;
+
+  const CHARGE_STATUS_LABEL = {
+    pending: "Aguardando resposta",
+    responded: "Cliente respondeu",
+    closed: "Encerrado automaticamente",
+    closed_error: "Falha ao encerrar",
+    resolved_externally: "Resolvido manualmente",
+  };
+
+  function renderAutoCloseGateBanner(enabled) {
+    autoCloseGateBanner.className = "gate-banner " + (enabled ? "on" : "off");
+    autoCloseGateBanner.innerHTML =
+      '<span class="gate-dot"></span><span>' +
+      (enabled
+        ? "Fechamento automático LIGADO globalmente (FOLLOWUP_AUTOCLOSE_ENABLED=true). Chamados de perfis com o switch de fechamento marcado serão encerrados sozinhos ao vencer o prazo."
+        : "Fechamento automático DESLIGADO globalmente (FOLLOWUP_AUTOCLOSE_ENABLED não é \"true\" no ambiente). " +
+          "Os prazos abaixo são só informativos — nenhum chamado é encerrado sozinho enquanto isso não mudar no .env.") +
+      "</span>";
+  }
+
+  async function loadCharges() {
+    chargesList.innerHTML = '<div class="empty">Carregando…</div>';
+    try {
+      const res = await fetch("/api/followup/charges");
+      const data = await res.json();
+      renderAutoCloseGateBanner(data.autoCloseEnabled);
+      latestCharges = data.charges || [];
+      renderCharges();
+      if (chargesCountdownTimer) clearInterval(chargesCountdownTimer);
+      chargesCountdownTimer = setInterval(updateCountdowns, 1000);
+    } catch (err) {
+      chargesList.innerHTML = '<div class="empty">Falha ao carregar cobranças: ' + escapeHtml(String(err)) + "</div>";
+    }
+  }
+
+  function fmtCountdown(deadlineIso) {
+    const diffMs = new Date(deadlineIso).getTime() - Date.now();
+    if (diffMs <= 0) return "prazo vencido (processando na próxima checagem)";
+    const totalMin = Math.floor(diffMs / 60000);
+    const days = Math.floor(totalMin / (24 * 60));
+    const hours = Math.floor((totalMin % (24 * 60)) / 60);
+    const mins = totalMin % 60;
+    const parts = [];
+    if (days > 0) parts.push(days + "d");
+    parts.push(hours + "h", mins + "m");
+    return "faltam " + parts.join(" ") + " (relógio corrido; o prazo em si é contado em horas úteis)";
+  }
+
+  function renderCharges() {
+    if (!latestCharges.length) {
+      chargesList.innerHTML = '<div class="empty">Nenhum chamado foi cobrado ainda.</div>';
+      return;
+    }
+    // Mais recentes primeiro.
+    const sorted = [...latestCharges].sort((a, b) => new Date(b.chargedAt) - new Date(a.chargedAt));
+    chargesList.innerHTML = "";
+    for (const c of sorted) {
+      const card = document.createElement("div");
+      card.className = "charge-card";
+      const badgeClass = c.status;
+      card.innerHTML =
+        '<div class="charge-head">' +
+        '<div><div class="charge-title">#' + c.ticketId + " — " + escapeHtml(c.subject || "") + '</div>' +
+        '<div class="charge-sub">' + escapeHtml(c.profileName) + (c.ownerTeam ? " · " + escapeHtml(c.ownerTeam) : "") + '</div></div>' +
+        '<span class="charge-badge ' + badgeClass + '">' + (CHARGE_STATUS_LABEL[c.status] || c.status) + "</span>" +
+        "</div>" +
+        '<div class="charge-meta">' +
+        "<span>Cobrado em: <b>" + new Date(c.chargedAt).toLocaleString("pt-BR") + "</b></span>" +
+        (c.status === "pending"
+          ? '<span>Fechamento automático: <b class="charge-countdown" data-deadline="' + c.deadlineAt + '">' +
+            fmtCountdown(c.deadlineAt) + "</b></span>"
+          : c.resolvedAt
+            ? "<span>Desde: <b>" + new Date(c.resolvedAt).toLocaleString("pt-BR") + "</b></span>"
+            : "") +
+        (c.closeError ? '<span style="color:var(--err)">Erro: <b>' + escapeHtml(c.closeError) + "</b></span>" : "") +
+        "</div>";
+      chargesList.appendChild(card);
+    }
+  }
+
+  function updateCountdowns() {
+    chargesList.querySelectorAll(".charge-countdown[data-deadline]").forEach((el) => {
+      el.textContent = fmtCountdown(el.dataset.deadline);
+    });
+  }
+
+  refreshChargesBtn.addEventListener("click", loadCharges);
 })();
 </script>
 </body>

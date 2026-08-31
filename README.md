@@ -214,6 +214,41 @@ interruptor é geral: mesmo com perfis habilitados no painel, nada roda enquanto
 for `true`. Depois de ativado, cada perfil roda sozinho no seu próprio intervalo
 (verificado a cada `FOLLOWUP_TICK_MINUTES`, padrão 15min — não precisa mexer nisso).
 
+O prazo de silêncio (`thresholdBusinessHours`) é contado em **HORAS úteis** (padrão 24h),
+não dias — confirmado com o usuário para poder expressar um valor exato em vez de uma
+aproximação em dias úteis cheios.
+
+## Aba "Cobranças" e fechamento automático (opcional)
+
+Toda cobrança enviada (ver acima) fica rastreada (`src/store/followUpCharges.ts`) e
+aparece na aba **"Cobranças"** do painel: chamado, equipe/perfil, quando foi cobrado, e —
+quando o fechamento automático está ligado — uma contagem regressiva até o fechamento.
+
+Opcionalmente, um chamado já cobrado que continua sem retorno do cliente pode ser
+**fechado sozinho** (`status: "Resolvido"`), com uma ação pública explicando o motivo,
+publicada pela mesma identidade que cobrou. Regra (`src/agent/followUpClose.ts`), por
+chamado já cobrado:
+
+1. o chamado ainda está "parado" (`baseStatus: "Stopped"`) — se alguém mudou o status
+   manualmente por fora, o rastreamento vira "resolvido externamente" e nunca é tocado;
+2. a última ação ainda é da automação ou do próprio owner (ninguém — nem o cliente —
+   respondeu desde a cobrança); se outra pessoa agiu, vira "cliente respondeu" e nunca
+   fecha por aqui;
+3. o tempo decorrido **desde a cobrança** (não desde o silêncio original), no mesmo
+   `thresholdBusinessHours` do perfil, já venceu.
+
+É uma automação **mais sensível** que só publicar uma mensagem (fechar não dá pra
+desfazer com uma nova mensagem), por isso tem gate **duplo e independente** do de cobrar:
+
+- `FOLLOWUP_AUTOCLOSE_ENABLED=false` no `.env` (interruptor geral, separado de
+  `FOLLOWUP_AUTOMATION_ENABLED` — ligar a cobrança nunca liga o fechamento);
+- `autoCloseEnabled` por perfil (painel, switch dedicado — pede confirmação explícita ao
+  ligar, porque é uma mutação autônoma sem revisão humana).
+
+Os dois precisam estar ligados para aquele perfil fechar chamados sozinho. Desligado,
+os prazos na aba "Cobranças" continuam aparecendo — só que como informação, sem fechar
+nada.
+
 ## Segurança e operação
 
 - O `MOVIDESK_TOKEN` só existe dentro de `src/movidesk/client.ts`. O modelo nunca vê o
