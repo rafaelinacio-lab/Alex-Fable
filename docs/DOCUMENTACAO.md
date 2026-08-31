@@ -98,7 +98,12 @@ Só o módulo `src/movidesk/client.ts` lê `MOVIDESK_TOKEN` do ambiente.
 - Paginar exaustivamente uma busca grande (até ~15.000 registros) numa única operação,
   sem precisar de confirmação a cada lote — e ser honesto quando não é possível saber o
   total exato (a API do Movidesk não suporta `$count`).
-- Exportar resultados para um arquivo `.xlsx` real, gravado em disco.
+- Exportar resultados para um arquivo `.xlsx`/`.pdf` real, gravado em disco e baixável
+  pelo navegador (painel web).
+- Rodar sozinho, em segundo plano, verificando chamados "Aguardando Retorno do
+  Cliente"/"Aguardando Validação do Cliente" com a última ação do owner há tempo
+  demais (horas úteis, calendário do SLA), e publicar uma cobrança automática — ver
+  seção 6.1. Desligado por padrão (`FOLLOWUP_AUTOMATION_ENABLED`).
 
 ## 5. Contrato de ferramentas (resumo)
 
@@ -116,6 +121,8 @@ Especificação completa na seção 4 do prompt de sistema. Categorias:
   exportação em uma chamada, server-side — usar sempre que envolver o resultado de uma
   busca), `export_tickets_to_excel`/`export_tickets_to_pdf` (só para linhas pequenas que
   o modelo já tem prontas, até 200). PDF tem limite bem menor (5.000 linhas) que Excel.
+- **Automação**: `check_pending_customer_tickets` (roda na hora a verificação de
+  cobrança automática — sem parâmetros; ver seção 6.1).
 
 Toda ferramenta tem schema validado (`zod`) em `src/agent/tools.ts` — o modelo nunca
 manda JSON solto direto para a API; o schema rejeita antes.
@@ -136,6 +143,35 @@ Configuração central em [`src/config/tenant.ts`](../src/config/tenant.ts), car
 Para consultas livres (ex: "chamados da organização X") que não pertencem a um fluxo
 fixo, o agente usa `movidesk_search_organizations` + `movidesk_search_tickets_exhaustive`
 diretamente contra a API, sem depender de catálogo.
+
+### 6.1 Cobrança automática de retorno do cliente
+
+Implementação: `src/agent/followUp.ts` (regra pura, `evaluateTicket`/`runFollowUpCheck`),
+`src/agent/followUpScheduler.ts` (`setInterval` gated por `FOLLOW_UP_CONFIG.enabled`,
+ligado em `src/agent/cli.ts`), `src/config/followUp.ts` (configuração/gate),
+`src/movidesk/businessHours.ts` (cálculo de horas úteis pelo calendário do SLA).
+
+**Regra** (confirmada com o usuário): um chamado em "Aguardando Retorno do Cliente" ou
+"Aguardando Validação do Cliente" é cobrado quando a última ação foi do `owner` (não do
+cliente — indica silêncio real, não resposta ainda não refletida no status) E o tempo
+decorrido desde a mais recente entre essa ação e a entrada no status atual
+(`statusHistories`) passa de `FOLLOWUP_THRESHOLD_BUSINESS_DAYS` (padrão 3), contado em
+horas úteis (seg-sex 07:45-12:00 e 13:30-18:00 — não dias corridos). A cobrança é
+publicada por uma identidade dedicada (`FOLLOWUP_SENDER_COD_REF`), nunca pelo owner
+individual — o que também torna a cobrança idempotente por rodada: como o remetente
+passa a ser essa identidade, na rodada seguinte a condição "última ação é do owner" já
+não bate mais para aquele chamado, então ele não é cobrado de novo pelo mesmo silêncio.
+
+Roda sozinho a cada `FOLLOWUP_CHECK_INTERVAL_HOURS` (padrão 24h) enquanto o processo do
+agente estiver de pé (mais uma vez logo na subida), com o resumo de cada rodada anunciado
+na aba "Conversa" do painel como mensagem de sistema (`dashboard.announceSystemMessage`,
+não passa pelo modelo). Duas buscas separadas (uma por status monitorado) em vez de um
+único filtro com `or`, pelo mesmo motivo da seção 8.11 (operadores não confirmados).
+
+**Desligado por padrão** (`FOLLOWUP_AUTOMATION_ENABLED=false`) — é uma mutação autônoma
+que fala com clientes reais sem revisão humana, então puxar código novo nunca deve ligar
+isso sozinho; exige opt-in explícito no `.env`. O mesmo gate vale para o disparo manual
+via ferramenta `check_pending_customer_tickets`.
 
 ## 7. Segurança e auditoria
 
@@ -233,6 +269,18 @@ Registro do que já foi corrigido, para não reintroduzir os mesmos problemas:
     `GET /exports/:filename` (sempre `path.basename()` do nome pedido — nunca sai de
     `EXPORTS_DIR`, mesmo com tentativa de path traversal). `DashboardHandle` ganhou um
     método `close()` para encerrar o servidor de forma limpa (usado pelos testes).
+15. **Cobrança automática de retorno do cliente** (ver seção 6.1): o usuário pediu que o
+    agente seja proativo com chamados "parados" esperando o cliente, com duas regras
+    explícitas — o status monitorado ("Aguardando Retorno do Cliente"/"Aguardando
+    Validação do Cliente") e a exigência de que a última ação seja do owner. O prazo
+    (3 dias úteis, calendário do SLA anexado pelo usuário) veio num PDF em turno
+    seguinte, e a instrução de usar tanto a data da última ação quanto a data de entrada
+    no status (a mais recente das duas) veio ainda depois — ambas incorporadas à regra
+    final em `evaluateTicket`. Diferente de toda automação anterior do projeto, esta
+    executa uma mutação real (ação pública em chamado) sem revisão humana e sem gatilho
+    de conversa — por isso ganhou um gate de ambiente dedicado
+    (`FOLLOWUP_AUTOMATION_ENABLED`, desligado por padrão) que nenhuma outra ferramenta
+    deste projeto precisou até aqui.
 
 ## 9. Limitações conhecidas
 

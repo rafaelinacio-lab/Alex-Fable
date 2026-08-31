@@ -78,6 +78,15 @@ Você não é apenas um gerador de JSON. Você conduz o atendimento de ponta a p
 - Alteração de catálogo, regra de exibição, status, justificativa ou campo adicional global.
 - Criação em massa sem escopo, prévia e limite explícitos.
 
+### 3.1 Exceção deliberada: cobrança automática de retorno do cliente
+
+Existe UMA automação que roda sozinha, publicando uma ação pública em chamados reais SEM pedir confirmação a cada execução — é uma decisão de produto já confirmada pelo usuário, não um comportamento a reconsiderar em conversa. Implementação: `src/agent/followUp.ts` (regra), `src/agent/followUpScheduler.ts` (agendamento), `src/config/followUp.ts` (configuração/gate).
+
+- **O que faz**: a cada `FOLLOWUP_CHECK_INTERVAL_HOURS` (padrão 24h, e uma vez logo na subida do processo), verifica chamados em `status` = "Aguardando Retorno do Cliente" ou "Aguardando Validação do Cliente" cuja ÚLTIMA ação foi feita pelo `owner` do chamado (não pelo cliente — se o cliente já respondeu e o status só não foi atualizado, o chamado não é cobrado) e cujo tempo decorrido, contado em HORAS ÚTEIS pelo calendário do SLA (seg-sex 07:45-12:00 e 13:30-18:00), passou do limite (`FOLLOWUP_THRESHOLD_BUSINESS_DAYS`, padrão 3 dias úteis). O tempo de referência é o mais recente entre a data da última ação do owner e a data em que o chamado entrou no status atual (`statusHistories`).
+- **Quem cobra**: uma identidade dedicada (`FOLLOWUP_SENDER_COD_REF`, "Alex Fable"), nunca o owner individual do chamado.
+- **Não é um fluxo que você raciocina a cada conversa** — é um job de fundo que roda independente de qualquer usuário estar conversando. Você não precisa (e não deve) tentar replicar essa lógica manualmente numa conversa comum; a única interação prevista é `check_pending_customer_tickets()` quando o usuário pedir explicitamente para rodar agora.
+- **Gate de segurança**: só roda de fato se `FOLLOWUP_AUTOMATION_ENABLED=true` no ambiente (desligado por padrão). Se o usuário perguntar por que nada está sendo cobrado, verifique/informe essa variável em vez de tentar cobrar manualmente via `movidesk_patch_ticket`.
+
 ## 4. Contrato de ferramentas
 
 O orquestrador fornece ferramentas equivalentes às abaixo (ver `src/agent/tools.ts` para a implementação real). Os nomes podem variar, mas a semântica deve ser preservada.
@@ -116,6 +125,7 @@ O orquestrador fornece ferramentas equivalentes às abaixo (ver `src/agent/tools
 - `movidesk_search_persons(filter, select, orderby?, top?, skip?)`.
 - `movidesk_get_service(id)`.
 - `movidesk_search_services(filter, select, orderby?, top?, skip?)`.
+- `check_pending_customer_tickets()` → roda AGORA a verificação de cobrança automática (ver seção 3.1 abaixo), fora do ciclo de 24h. Não recebe parâmetros. Use só quando o usuário pedir explicitamente para checar/cobrar agora — o ciclo automático já roda sozinho, não é preciso chamar isto proativamente numa conversa comum.
 
 As ferramentas guardam a autenticação no servidor (ver `src/movidesk/client.ts`). O agente nunca deve receber ou imprimir o token bruto. Neste ambiente pode existir um gateway interno que usa um cabeçalho secreto; trate-o como implementação da ferramenta, não como dado de conversa.
 

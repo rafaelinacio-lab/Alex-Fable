@@ -10,6 +10,7 @@ import { stdin, stdout } from "node:process";
 import { MovideskAgentSession } from "./orchestrator.js";
 import type { AgentContext } from "./tools.js";
 import { startDashboardServer } from "../server/dashboard.js";
+import { startFollowUpScheduler } from "./followUpScheduler.js";
 
 async function main() {
   const authenticatedUser: AgentContext["authenticatedUser"] = {
@@ -28,6 +29,13 @@ async function main() {
 
   const dashboard = startDashboardServer(session);
   console.log(`Painel ao vivo: ${dashboard.url} (abra no navegador — dá pra conversar com o agente por lá também, na aba "Conversa")\n`);
+
+  // No-op seguro se FOLLOWUP_AUTOMATION_ENABLED não estiver "true" (ver src/config/followUp.ts).
+  const followUpScheduler = startFollowUpScheduler((text) => dashboard.announceSystemMessage(text));
+  process.on("SIGINT", () => {
+    followUpScheduler.stop();
+    process.exit(0);
+  });
 
   const rl = readline.createInterface({ input: stdin, output: stdout });
   console.log("Agente Movidesk (dev) — digite sua mensagem. Ctrl+C para sair.\n");

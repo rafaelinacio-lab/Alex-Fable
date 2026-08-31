@@ -264,6 +264,7 @@ const TOOL_PARAMETERS: Record<ToolName, Record<string, unknown>> = {
     required: ["filter", "select"],
     additionalProperties: false,
   },
+  check_pending_customer_tickets: { type: "object", properties: {}, additionalProperties: false },
   movidesk_get_service: {
     type: "object",
     properties: { id: { type: "integer" } },

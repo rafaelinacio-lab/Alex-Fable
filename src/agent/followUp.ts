@@ -1,0 +1,210 @@
+/**
+ * Motor da automação de cobrança de chamados aguardando retorno/validação do cliente.
+ *
+ * Regra (confirmada com o usuário, ver src/config/followUp.ts):
+ *  1. status do chamado é um dos monitorados ("Aguardando Retorno do Cliente" /
+ *     "Aguardando Validação do Cliente").
+ *  2. a ÚLTIMA ação do chamado foi feita pelo OWNER (responsável) — se foi o cliente ou
+ *     qualquer outra pessoa, o chamado não entra (o cliente já pode ter respondido e o
+ *     status só não foi atualizado ainda).
+ *  3. o tempo decorrido desde a referência (a mais recente entre a data da última ação
+ *     do owner e a data em que o chamado entrou no status atual), contado em HORAS
+ *     ÚTEIS (calendário do SLA — src/movidesk/businessHours.ts), é >= ao limite
+ *     configurado (padrão 3 dias úteis).
+ *
+ * Cada chamado que bate as três condições recebe uma ação pública automática (ver
+ * buildFollowUpMessage), criada pela identidade dedicada configurada — nunca pelo
+ * owner do chamado. Cada mutação é auditada (store/audit.ts) e emitida como evento
+ * "file_ready"-like para o painel poder mostrar o resultado sem o usuário precisar
+ * perguntar (ver src/observability/eventBus.ts).
+ */
+
+import {
+  searchTicketsExhaustive,
+  patchTicket,
+  type TicketSummary,
+  type TicketActionSummary,
+  type TicketStatusHistoryEntry,
+} from "../movidesk/tickets.js";
+import { businessMinutesElapsed, businessDaysToMinutes } from "../movidesk/businessHours.js";
+import { FOLLOW_UP_CONFIG, buildFollowUpMessage } from "../config/followUp.js";
+import { recordAuditEvent, hashPayload, newCorrelationId } from "../store/audit.js";
+import { emitEvent, newEventId } from "../observability/eventBus.js";
+import { MovideskApiError } from "../movidesk/client.js";
+
+const SYSTEM_ACTOR = { id_local: "sistema-followup", email: "automacao-followup@viasoft.com.br" };
+
+export interface FollowUpTicketResult {
+  id: number;
+  subject: string;
+  status: string;
+  elapsedBusinessHours: number;
+  action: "charged" | "skipped_owner_not_last" | "skipped_within_threshold" | "skipped_no_data" | "error";
+  errorMessage?: string;
+}
+
+export interface FollowUpRunResult {
+  checkedCount: number;
+  charged: FollowUpTicketResult[];
+  skipped: FollowUpTicketResult[];
+  errors: FollowUpTicketResult[];
+  ranAt: string;
+}
+
+function latestByDate<T extends { createdDate?: string } | { changedDate?: string }>(
+  items: T[] | undefined,
+  dateField: "createdDate" | "changedDate",
+): T | undefined {
+  if (!items?.length) return undefined;
+  return items.reduce((latest, item) => {
+    const itemDate = (item as Record<string, unknown>)[dateField] as string | undefined;
+    const latestDate = (latest as Record<string, unknown>)[dateField] as string | undefined;
+    if (!itemDate) return latest;
+    if (!latestDate) return item;
+    return new Date(itemDate) > new Date(latestDate) ? item : latest;
+  });
+}
+
+/** Avalia um único ticket (já com actions/statusHistories expandidos) contra a regra. */
+export function evaluateTicket(ticket: TicketSummary, now: Date = new Date()): FollowUpTicketResult {
+  const base = { id: ticket.id, subject: ticket.subject, status: ticket.status };
+
+  if (!ticket.owner?.id) {
+    return { ...base, elapsedBusinessHours: 0, action: "skipped_no_data" };
+  }
+
+  const lastAction = latestByDate<TicketActionSummary>(ticket.actions, "createdDate");
+  if (!lastAction?.createdDate || !lastAction.createdBy?.id) {
+    return { ...base, elapsedBusinessHours: 0, action: "skipped_no_data" };
+  }
+
+  if (lastAction.createdBy.id !== ticket.owner.id) {
+    return { ...base, elapsedBusinessHours: 0, action: "skipped_owner_not_last" };
+  }
+
+  // Entre as entradas de statusHistories que batem o status ATUAL do ticket, pega a mais
+  // recente — representa quando o chamado entrou na permanência atual nesse status.
+  const matchingStatusEntries = (ticket.statusHistories ?? []).filter((h) => h.status === ticket.status);
+  const statusEntry = latestByDate<TicketStatusHistoryEntry>(matchingStatusEntries, "changedDate");
+
+  const actionDate = new Date(lastAction.createdDate);
+  const statusDate = statusEntry?.changedDate ? new Date(statusEntry.changedDate) : undefined;
+  const reference = statusDate && statusDate > actionDate ? statusDate : actionDate;
+
+  const elapsedMinutes = businessMinutesElapsed(reference, now);
+  const thresholdMinutes = businessDaysToMinutes(FOLLOW_UP_CONFIG.thresholdBusinessDays);
+  const elapsedBusinessHours = Math.round((elapsedMinutes / 60) * 10) / 10;
+
+  if (elapsedMinutes < thresholdMinutes) {
+    return { ...base, elapsedBusinessHours, action: "skipped_within_threshold" };
+  }
+
+  return { ...base, elapsedBusinessHours, action: "charged" };
+}
+
+async function chargeTicket(result: FollowUpTicketResult): Promise<FollowUpTicketResult> {
+  const payload = {
+    actions: [
+      {
+        type: 2, // pública — precisa chegar ao cliente
+        createdBy: { id: FOLLOW_UP_CONFIG.reminderSenderId },
+        description: buildFollowUpMessage(result.subject),
+      },
+    ],
+  };
+  try {
+    await patchTicket(result.id, payload);
+    await recordAuditEvent({
+      timestamp: new Date().toISOString(),
+      authenticatedUser: SYSTEM_ACTOR,
+      intent: "cobrança automática de retorno do cliente",
+      operation: "followUp.chargeTicket",
+      endpoint: "PATCH /tickets",
+      targetId: result.id,
+      payloadHash: hashPayload(payload),
+      correlationId: newCorrelationId(),
+      httpStatus: 200,
+      changedFields: ["actions"],
+    });
+    return result;
+  } catch (err) {
+    const errorCode = err instanceof MovideskApiError ? `movidesk:${err.status}:${err.propertyName ?? ""}` : "unknown";
+    await recordAuditEvent({
+      timestamp: new Date().toISOString(),
+      authenticatedUser: SYSTEM_ACTOR,
+      intent: "cobrança automática de retorno do cliente",
+      operation: "followUp.chargeTicket",
+      endpoint: "PATCH /tickets",
+      targetId: result.id,
+      payloadHash: hashPayload(payload),
+      correlationId: newCorrelationId(),
+      errorCode,
+    });
+    return { ...result, action: "error", errorMessage: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Roda a verificação completa: busca os chamados nos status monitorados, avalia a regra
+ * ticket a ticket, cobra os que qualificam, e devolve um resumo. Não lança em caso de
+ * falha pontual num ticket — cada erro fica registrado em `errors`.
+ */
+export async function runFollowUpCheck(): Promise<FollowUpRunResult> {
+  const now = new Date();
+  const allTickets: TicketSummary[] = [];
+  const seenIds = new Set<number>();
+
+  // Duas buscas separadas (uma por status) em vez de um único filtro com "or" — "or" não
+  // é operador confirmado nesta API (ver docs/movidesk-api-tickets.md, seção 6).
+  for (const status of FOLLOW_UP_CONFIG.waitingStatuses) {
+    const result = await searchTicketsExhaustive({
+      filter: `status eq '${status.replace(/'/g, "''")}'`,
+      select: ["id", "subject", "status", "owner", "ownerTeam"],
+      expand: "actions,statusHistories",
+    });
+    for (const ticket of result.tickets) {
+      if (!seenIds.has(ticket.id)) {
+        seenIds.add(ticket.id);
+        allTickets.push(ticket);
+      }
+    }
+  }
+
+  const charged: FollowUpTicketResult[] = [];
+  const skipped: FollowUpTicketResult[] = [];
+  const errors: FollowUpTicketResult[] = [];
+
+  for (const ticket of allTickets) {
+    const evaluation = evaluateTicket(ticket, now);
+    if (evaluation.action === "charged") {
+      const chargeResult = await chargeTicket(evaluation);
+      (chargeResult.action === "charged" ? charged : errors).push(chargeResult);
+    } else {
+      skipped.push(evaluation);
+    }
+  }
+
+  const runResult: FollowUpRunResult = {
+    checkedCount: allTickets.length,
+    charged,
+    skipped,
+    errors,
+    ranAt: now.toISOString(),
+  };
+
+  emitEvent({
+    kind: "tool_call_end",
+    id: newEventId(),
+    timestamp: now.toISOString(),
+    tool: "followUp.runFollowUpCheck",
+    status: errors.length > 0 ? "error" : "ok",
+    durationMs: 0,
+    output: {
+      checkedCount: runResult.checkedCount,
+      chargedIds: charged.map((c) => c.id),
+      errorIds: errors.map((e) => e.id),
+    },
+  });
+
+  return runResult;
+}

@@ -40,7 +40,7 @@ agentEventBus.on("event", (event: AgentEvent) => {
 
 export interface ChatMessage {
   id: string;
-  role: "user" | "assistant" | "error" | "file";
+  role: "user" | "assistant" | "error" | "file" | "system";
   text: string;
   timestamp: string;
   source: "web" | "terminal" | "system";
@@ -58,6 +58,10 @@ export interface DashboardHandle {
    * para todas as abas de conversa conectadas. Use isto no lugar de `session.send()` diretamente
    * sempre que a mensagem também deve aparecer no painel web (ex: o REPL de terminal). */
   sendChatMessage(text: string, source: ChatMessage["source"]): Promise<string>;
+  /** Publica um aviso na aba Conversa SEM passar pelo agente (não é um turno de usuário) —
+   * usado por automações de fundo, ex: o resumo de cada rodada da cobrança automática
+   * (ver src/agent/followUpScheduler.ts). Aparece com estilo diferenciado ("automação"). */
+  announceSystemMessage(text: string): void;
   /** Encerra o servidor HTTP e os WebSockets — usado em testes; o CLI normalmente deixa rodando. */
   close(): Promise<void>;
 }
@@ -195,6 +199,10 @@ export function startDashboardServer(
     }
   }
 
+  function announceSystemMessage(text: string): void {
+    pushChat({ role: "system", text, timestamp: new Date().toISOString(), source: "system" });
+  }
+
   chatWss.on("connection", (socket: WebSocket) => {
     chatClients.add(socket);
     socket.send(JSON.stringify({ type: "chat_history", messages: chatHistory }));
@@ -231,5 +239,5 @@ export function startDashboardServer(
     await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
   }
 
-  return { url: `http://localhost:${port}`, sendChatMessage, close };
+  return { url: `http://localhost:${port}`, sendChatMessage, announceSystemMessage, close };
 }

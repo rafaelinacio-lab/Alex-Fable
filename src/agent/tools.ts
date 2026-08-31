@@ -35,6 +35,8 @@ import { idempotencyGet, idempotencyPut, idempotencyReserve } from "../store/ide
 import { emitEvent, newEventId, sanitizeForDashboard } from "../observability/eventBus.js";
 import { exportRowsToExcel } from "../local/export.js";
 import { exportRowsToPdf, PDF_MAX_ROWS } from "../local/pdfExport.js";
+import { runFollowUpCheck } from "./followUp.js";
+import { FOLLOW_UP_CONFIG } from "../config/followUp.js";
 import path from "node:path";
 
 export interface AgentContext {
@@ -153,6 +155,7 @@ const schemas = {
     top: z.number().int().positive().max(100).default(20),
     skip: z.number().int().nonnegative().optional(),
   }),
+  check_pending_customer_tickets: z.object({}),
   movidesk_get_service: z.object({ id: z.number().int().positive() }),
   movidesk_search_services: z.object({
     filter: z.string(),
@@ -206,6 +209,8 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
     "Atualiza um chamado Movidesk existente (status, campos, ações). Ao alterar status, inclua também justification.",
   movidesk_get_person: "Busca uma pessoa Movidesk por cod_ref.",
   movidesk_search_persons: "Busca pessoas Movidesk via OData. $select é obrigatório.",
+  check_pending_customer_tickets:
+    "Roda AGORA (fora do agendamento automático de 24h) a verificação de chamados 'Aguardando Retorno do Cliente'/'Aguardando Validação do Cliente' há tempo demais (regra completa em src/agent/followUp.ts: última ação tem que ser do owner, prazo em horas úteis conforme o SLA). Chamados que qualificam recebem uma ação pública automática de cobrança nesta mesma chamada — não é só uma prévia. Só faz sentido se FOLLOWUP_AUTOMATION_ENABLED=true (senão devolve checkedCount:0 sem buscar nada). Use quando o usuário pedir explicitamente para checar/cobrar agora, fora do ciclo automático.",
   movidesk_get_service: "Busca um serviço Movidesk por ID.",
   movidesk_search_services: "Busca serviços Movidesk via OData. $select é obrigatório.",
 };
@@ -537,6 +542,19 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
         top: input.top,
         skip: input.skip,
       });
+
+    case "check_pending_customer_tickets": {
+      if (!FOLLOW_UP_CONFIG.enabled) {
+        return {
+          checkedCount: 0,
+          charged: [],
+          skipped: [],
+          errors: [],
+          note: "FOLLOWUP_AUTOMATION_ENABLED não está 'true' — a automação de cobrança está desligada, nada foi verificado.",
+        };
+      }
+      return runFollowUpCheck();
+    }
 
     case "movidesk_get_service":
       return getService(input.id);

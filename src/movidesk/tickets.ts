@@ -24,6 +24,25 @@ export interface TicketAction {
   description: string;
 }
 
+/** Forma de uma ação já existente, como devolvida pela API (via $expand=actions). */
+export interface TicketActionSummary {
+  id?: number;
+  type?: number;
+  createdBy?: { id: string; businessName?: string };
+  createdDate?: string;
+  description?: string;
+  [key: string]: unknown;
+}
+
+/** Entrada de statusHistories (docs/movidesk-api-tickets.md, seção 22). */
+export interface TicketStatusHistoryEntry {
+  status?: string;
+  justification?: string;
+  changedBy?: { id: string; businessName?: string };
+  changedDate?: string;
+  [key: string]: unknown;
+}
+
 export interface CreateTicketPayload {
   type: number;
   origin: number;
@@ -62,8 +81,13 @@ export interface TicketSummary {
   status: string;
   baseStatus?: string;
   ownerTeam?: string;
+  owner?: { id: string; businessName?: string };
   serviceFirstLevelId?: number;
   category?: string;
+  /** Presente só quando a busca usa $expand=actions. */
+  actions?: TicketActionSummary[];
+  /** Presente só quando a busca usa $expand=statusHistories. */
+  statusHistories?: TicketStatusHistoryEntry[];
   [key: string]: unknown;
 }
 
@@ -191,7 +215,7 @@ const DEFAULT_MAX_PAGES = 50;
  * com o enum confirmado (`OPEN_BASE_STATUSES`), é a forma robusta.
  */
 export async function searchTicketsExhaustive(
-  base: Pick<ODataQuery, "filter" | "select">,
+  base: Pick<ODataQuery, "filter" | "select" | "expand">,
   opts?: { pageSize?: number; maxPages?: number; source?: "current" | "past"; onlyOpen?: boolean },
 ): Promise<ExhaustiveSearchResult> {
   if (!base.select?.length) {

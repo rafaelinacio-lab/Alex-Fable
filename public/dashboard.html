@@ -184,6 +184,15 @@
     padding: 10px;
     max-width: 320px;
   }
+  .bubble.system {
+    align-self: center;
+    background: transparent;
+    border: 1px dashed var(--panel-border);
+    color: var(--muted);
+    font-size: 12.5px;
+    font-style: italic;
+    max-width: 90%;
+  }
   .file-card { display: flex; align-items: center; gap: 10px; }
   .file-icon { font-size: 28px; line-height: 1; }
   .file-info { flex: 1; min-width: 0; }
@@ -529,7 +538,12 @@
         "</div>";
     } else {
       el.className = "bubble " + message.role;
-      const meta = message.role === "user" ? (message.source === "terminal" ? "via terminal" : "") : "";
+      const meta =
+        message.role === "user"
+          ? (message.source === "terminal" ? "via terminal" : "")
+          : message.role === "system"
+            ? "automação"
+            : "";
       el.innerHTML = escapeHtml(message.text) + (meta ? '<span class="meta">' + meta + "</span>" : "");
     }
 

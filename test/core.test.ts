@@ -17,6 +17,8 @@ import { emitEvent, newEventId } from "../src/observability/eventBus.js";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { businessMinutesElapsed, businessDaysToMinutes, BUSINESS_MINUTES_PER_DAY } from "../src/movidesk/businessHours.js";
+import { evaluateTicket } from "../src/agent/followUp.js";
 
 test("buildQueryString coloca id/protocol como parâmetro extra (não path) — regressão do bug de endpoint", () => {
   const qs = buildQueryString({ extra: { id: 123 } });
@@ -353,4 +355,73 @@ test("painel serve arquivos gerados para download e bloqueia path traversal", as
     await dashboard.close();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("businessMinutesElapsed calcula horário útil conforme o SLA (seg-sex 07:45-12:00 e 13:30-18:00)", () => {
+  assert.equal(BUSINESS_MINUTES_PER_DAY, 525); // 8h45min
+  assert.equal(businessDaysToMinutes(3), 1575); // 3 dias úteis
+
+  // Sexta 10:00 local -> Segunda 10:00 local: resto da sexta (2h manhã + 4h30 tarde) + 2h15 de segunda = 525min
+  assert.equal(
+    businessMinutesElapsed(new Date("2026-03-27T13:00:00Z"), new Date("2026-03-30T13:00:00Z")),
+    525,
+  );
+
+  // Um dia útil cheio corrido (segunda 00:00 -> terça 00:00 local)
+  assert.equal(
+    businessMinutesElapsed(new Date("2026-03-30T03:00:00Z"), new Date("2026-03-31T03:00:00Z")),
+    525,
+  );
+
+  // Durante o horário de almoço (12:30-13:00 local): não conta nada
+  assert.equal(
+    businessMinutesElapsed(new Date("2026-03-30T15:30:00Z"), new Date("2026-03-30T16:00:00Z")),
+    0,
+  );
+
+  // to <= from: sempre 0
+  assert.equal(businessMinutesElapsed(new Date("2026-03-30T13:00:00Z"), new Date("2026-03-30T13:00:00Z")), 0);
+});
+
+test("evaluateTicket (cobrança automática): só cobra quando última ação é do owner E o prazo em horas úteis venceu", () => {
+  const now = new Date("2026-04-08T15:00:00Z"); // quarta-feira, 12:00 local
+
+  const base = {
+    id: 1,
+    subject: "Chamado teste",
+    status: "Aguardando Retorno do Cliente",
+    owner: { id: "007-owner" },
+  };
+
+  // Owner respondeu há 4 dias úteis -> vence o prazo de 3 dias úteis -> cobra
+  const vencido = {
+    ...base,
+    actions: [{ createdDate: "2026-04-01T15:00:00Z", createdBy: { id: "007-owner" } }],
+    statusHistories: [{ status: base.status, changedDate: "2026-04-01T15:00:00Z" }],
+  };
+  assert.equal(evaluateTicket(vencido, now).action, "charged");
+
+  // Cliente respondeu por último (mesmo que o prazo já tenha passado) -> nunca cobra
+  const clienteRespondeu = {
+    ...vencido,
+    id: 2,
+    actions: [
+      ...vencido.actions,
+      { createdDate: "2026-04-02T15:00:00Z", createdBy: { id: "cliente-123" } },
+    ],
+  };
+  assert.equal(evaluateTicket(clienteRespondeu, now).action, "skipped_owner_not_last");
+
+  // Owner respondeu ontem (dentro do prazo de 3 dias úteis) -> ainda não cobra
+  const dentroDoPrazo = {
+    ...base,
+    id: 3,
+    actions: [{ createdDate: "2026-04-07T15:00:00Z", createdBy: { id: "007-owner" } }],
+    statusHistories: [{ status: base.status, changedDate: "2026-04-07T15:00:00Z" }],
+  };
+  assert.equal(evaluateTicket(dentroDoPrazo, now).action, "skipped_within_threshold");
+
+  // Sem owner -> não dá pra confirmar a regra -> não cobra
+  const semOwner = { ...vencido, id: 4, owner: undefined };
+  assert.equal(evaluateTicket(semOwner, now).action, "skipped_no_data");
 });
