@@ -4,6 +4,9 @@
  *
  *  - Status monitorados: "Aguardando Retorno do Cliente" e "Aguardando Validação do
  *    Cliente" (confirmados no SLA de Atendimento — Movidesk deste tenant, seção 3).
+ *  - Escopo: SOMENTE chamados da equipe "VIASOFT - Sistemas Internos" (mesmo ownerTeam
+ *    do fluxo `sistemas_internos`, ver src/config/tenant.ts). Confirmado pelo usuário —
+ *    não cobrar chamados de outras equipes.
  *  - Prazo de silêncio antes de cobrar: 3 dias ÚTEIS (não corridos), contados pelo
  *    calendário de expediente do SLA (seg-sex, 07:45-12:00 e 13:30-18:00 — ver
  *    src/movidesk/businessHours.ts). O usuário não especificou um número exato de dias
@@ -27,6 +30,8 @@ export interface FollowUpConfig {
   enabled: boolean;
   /** Textos EXATOS de status monitorados — comparação sensível a maiúsculas/minúsculas no $filter. */
   waitingStatuses: string[];
+  /** ownerTeam ao qual a automação se restringe — nunca cobra chamados de outra equipe. */
+  ownerTeam: string;
   thresholdBusinessDays: number;
   checkIntervalHours: number;
   reminderSenderId: string;
@@ -41,6 +46,7 @@ function parseBool(value: string | undefined, fallback: boolean): boolean {
 export const FOLLOW_UP_CONFIG: FollowUpConfig = {
   enabled: parseBool(process.env.FOLLOWUP_AUTOMATION_ENABLED, false),
   waitingStatuses: ["Aguardando Retorno do Cliente", "Aguardando Validação do Cliente"],
+  ownerTeam: process.env.FOLLOWUP_OWNER_TEAM ?? "VIASOFT - Sistemas Internos",
   thresholdBusinessDays: Number(process.env.FOLLOWUP_THRESHOLD_BUSINESS_DAYS ?? 3),
   checkIntervalHours: Number(process.env.FOLLOWUP_CHECK_INTERVAL_HOURS ?? 24),
   reminderSenderId: process.env.FOLLOWUP_SENDER_COD_REF ?? "007",

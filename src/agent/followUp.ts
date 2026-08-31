@@ -39,7 +39,13 @@ export interface FollowUpTicketResult {
   subject: string;
   status: string;
   elapsedBusinessHours: number;
-  action: "charged" | "skipped_owner_not_last" | "skipped_within_threshold" | "skipped_no_data" | "error";
+  action:
+    | "charged"
+    | "skipped_owner_not_last"
+    | "skipped_within_threshold"
+    | "skipped_no_data"
+    | "skipped_wrong_team"
+    | "error";
   errorMessage?: string;
 }
 
@@ -68,6 +74,13 @@ function latestByDate<T extends { createdDate?: string } | { changedDate?: strin
 /** Avalia um único ticket (já com actions/statusHistories expandidos) contra a regra. */
 export function evaluateTicket(ticket: TicketSummary, now: Date = new Date()): FollowUpTicketResult {
   const base = { id: ticket.id, subject: ticket.subject, status: ticket.status };
+
+  // Segunda verificação, além do $filter no servidor (defesa em profundidade — mesmo
+  // padrão já usado para "em aberto": nunca confiar só no OData para restringir escopo
+  // de uma mutação automática).
+  if (ticket.ownerTeam !== FOLLOW_UP_CONFIG.ownerTeam) {
+    return { ...base, elapsedBusinessHours: 0, action: "skipped_wrong_team" };
+  }
 
   if (!ticket.owner?.id) {
     return { ...base, elapsedBusinessHours: 0, action: "skipped_no_data" };
@@ -155,10 +168,13 @@ export async function runFollowUpCheck(): Promise<FollowUpRunResult> {
   const seenIds = new Set<number>();
 
   // Duas buscas separadas (uma por status) em vez de um único filtro com "or" — "or" não
-  // é operador confirmado nesta API (ver docs/movidesk-api-tickets.md, seção 6).
+  // é operador confirmado nesta API (ver docs/movidesk-api-tickets.md, seção 6). O filtro
+  // por ownerTeam (via "and", operador confirmado) restringe a automação a uma única
+  // equipe — confirmado pelo usuário: só "VIASOFT - Sistemas Internos" deve ser cobrada.
+  const teamFilter = `ownerTeam eq '${FOLLOW_UP_CONFIG.ownerTeam.replace(/'/g, "''")}'`;
   for (const status of FOLLOW_UP_CONFIG.waitingStatuses) {
     const result = await searchTicketsExhaustive({
-      filter: `status eq '${status.replace(/'/g, "''")}'`,
+      filter: `status eq '${status.replace(/'/g, "''")}' and ${teamFilter}`,
       select: ["id", "subject", "status", "owner", "ownerTeam"],
       expand: "actions,statusHistories",
     });

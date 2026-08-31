@@ -390,6 +390,7 @@ test("evaluateTicket (cobrança automática): só cobra quando última ação é
     id: 1,
     subject: "Chamado teste",
     status: "Aguardando Retorno do Cliente",
+    ownerTeam: "VIASOFT - Sistemas Internos",
     owner: { id: "007-owner" },
   };
 
@@ -424,4 +425,9 @@ test("evaluateTicket (cobrança automática): só cobra quando última ação é
   // Sem owner -> não dá pra confirmar a regra -> não cobra
   const semOwner = { ...vencido, id: 4, owner: undefined };
   assert.equal(evaluateTicket(semOwner, now).action, "skipped_no_data");
+
+  // Equipe diferente de "VIASOFT - Sistemas Internos" -> nunca cobra, mesmo vencido e
+  // com a última ação do owner (escopo confirmado pelo usuário: só essa equipe).
+  const outraEquipe = { ...vencido, id: 5, ownerTeam: "VIASOFT - Suporte Oracle Cloud" };
+  assert.equal(evaluateTicket(outraEquipe, now).action, "skipped_wrong_team");
 });

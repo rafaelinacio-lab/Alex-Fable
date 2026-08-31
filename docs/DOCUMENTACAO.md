@@ -151,8 +151,12 @@ Implementação: `src/agent/followUp.ts` (regra pura, `evaluateTicket`/`runFollo
 ligado em `src/agent/cli.ts`), `src/config/followUp.ts` (configuração/gate),
 `src/movidesk/businessHours.ts` (cálculo de horas úteis pelo calendário do SLA).
 
-**Regra** (confirmada com o usuário): um chamado em "Aguardando Retorno do Cliente" ou
-"Aguardando Validação do Cliente" é cobrado quando a última ação foi do `owner` (não do
+**Regra** (confirmada com o usuário): restrita à equipe `FOLLOWUP_OWNER_TEAM` (padrão
+"VIASOFT - Sistemas Internos" — mesmo `ownerTeam` do fluxo `sistemas_internos`), filtrada
+tanto no `$filter` OData quanto de novo localmente em `evaluateTicket` (defesa em
+profundidade, mesmo padrão já usado para `only_open`). Dentro dessa equipe, um chamado em
+"Aguardando Retorno do Cliente" ou "Aguardando Validação do Cliente" é cobrado quando a
+última ação foi do `owner` (não do
 cliente — indica silêncio real, não resposta ainda não refletida no status) E o tempo
 decorrido desde a mais recente entre essa ação e a entrada no status atual
 (`statusHistories`) passa de `FOLLOWUP_THRESHOLD_BUSINESS_DAYS` (padrão 3), contado em
