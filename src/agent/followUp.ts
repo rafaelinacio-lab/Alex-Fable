@@ -307,7 +307,16 @@ export async function runFollowUpCheck(profile: FollowUpProfile): Promise<Follow
       // decidir se a ÚLTIMA ação foi do responsável (linha ~145, todo perfil, mesmo
       // escopo "team") — sem isso, todo chamado caía em skipped_wrong_owner/
       // skipped_no_data e a automação nunca cobrava ninguém, em nenhum perfil.
-      expand: "actions,statusHistories,owner",
+      //
+      // MESMO PROBLEMA, um nível mais fundo: `actions` sem sub-expand devolve cada ação
+      // SEM `createdBy` (confirmado ao vivo) — e é `lastAction.createdBy.id` que decide
+      // se a última ação foi do owner (regra 3 do topo do arquivo). Sem
+      // `actions($expand=createdBy)`, toda ação vinha com createdBy ausente e TODO
+      // ticket caía em skipped_no_data, mesmo já com owner/status/justification certos.
+      // Sintaxe de sub-expand confirmada em docs/movidesk-api-tickets.md seção 6.5
+      // (`actions($expand=timeAppointments($expand=createdBy))`) — mesma ideia, um nível
+      // menos aninhado.
+      expand: "actions($expand=createdBy),statusHistories,owner",
     });
     for (const ticket of result.tickets) {
       if (!seenIds.has(ticket.id)) {
