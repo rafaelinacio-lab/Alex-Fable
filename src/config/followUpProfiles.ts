@@ -92,7 +92,16 @@ export type FollowUpProfileInput = Pick<
 
 const PROFILES_FILE = process.env.FOLLOWUP_PROFILES_FILE ?? "./data/local/followup_profiles.json";
 
-const DEFAULT_WAITING_STATUSES = ["Aguardando Retorno do Cliente", "Aguardando Validação do Cliente"];
+// Valores confirmados em produção real (tenant VIASOFT, equipe Sistemas Internos, ver
+// nota grande acima sobre `waitingJustifications`): o `status` do chamado é o texto
+// genérico "Aguardando" — "Aguardando Retorno do Cliente"/"Aguardando Validação do
+// Cliente" NUNCA existem como valor de `status` neste tenant, só como `justification`
+// (com capitalização inconsistente entre os dois: "Retorno do cliente" vs "Validação
+// Cliente" — confirmado via amostragem de tickets reais). Usar o texto composto antigo
+// como `status` fazia o `$filter` (comparação exata, `eq`) nunca bater com nada — o
+// perfil-semente ficava sempre com checkedCount 0, silenciosamente, sem nenhum erro.
+const DEFAULT_WAITING_STATUSES = ["Aguardando"];
+const DEFAULT_WAITING_JUSTIFICATIONS = ["Retorno do cliente", "Validação Cliente"];
 
 /**
  * Perfil-semente, usado só quando o arquivo de perfis ainda não existe (primeira
@@ -110,6 +119,7 @@ function seedProfile(): FollowUpProfile {
     ownerTeam: process.env.FOLLOWUP_OWNER_TEAM ?? "VIASOFT - Sistemas Internos",
     enabled: true,
     waitingStatuses: DEFAULT_WAITING_STATUSES,
+    waitingJustifications: DEFAULT_WAITING_JUSTIFICATIONS,
     thresholdBusinessDays: Number(process.env.FOLLOWUP_THRESHOLD_BUSINESS_DAYS ?? 3),
     checkIntervalHours: Number(process.env.FOLLOWUP_CHECK_INTERVAL_HOURS ?? 24),
     reminderSenderId: process.env.FOLLOWUP_SENDER_COD_REF ?? "007",

@@ -293,7 +293,15 @@ export async function runFollowUpCheck(profile: FollowUpProfile): Promise<Follow
     const result = await searchTicketsExhaustive({
       filter: `status eq '${status.replace(/'/g, "''")}'${scopeFilter}`,
       select: ["id", "subject", "status", "justification", "owner", "ownerTeam"],
-      expand: "actions,statusHistories",
+      // IMPORTANTE: `owner` só vem preenchido no endpoint de LISTA (/tickets) se estiver
+      // em $expand — diferente de GET /tickets?id=..., que sempre inclui o objeto
+      // completo. Pedir só em $select (sem expand) devolve o ticket sem a propriedade
+      // `owner` (não null — ausente), o que quebrava silenciosamente: evaluateTicket
+      // usa ticket.owner.id tanto para o escopo "owner" (linha ~125) quanto para
+      // decidir se a ÚLTIMA ação foi do responsável (linha ~145, todo perfil, mesmo
+      // escopo "team") — sem isso, todo chamado caía em skipped_wrong_owner/
+      // skipped_no_data e a automação nunca cobrava ninguém, em nenhum perfil.
+      expand: "actions,statusHistories,owner",
     });
     for (const ticket of result.tickets) {
       if (!seenIds.has(ticket.id)) {

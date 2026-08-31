@@ -6,5 +6,6 @@ data/idempotency/
 data/local/movidesk_contatos.json
 data/local/organizacoes.json
 data/local/ad_users.json
+data/local/followup_profiles.json
 *.log
 exports/
