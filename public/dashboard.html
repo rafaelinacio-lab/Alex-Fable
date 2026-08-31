@@ -133,13 +133,16 @@
   .tabs button.active { color: var(--text); border-bottom-color: var(--accent); }
   .view { display: none; }
   .view.active { display: block; }
+  /* #chatView precisa de flex (não block) quando ativa — seletor com a mesma
+     especificidade de ID+classe de #chatView abaixo, então bate .view.active em vez de
+     ficar sempre visível por baixo das outras abas (bug: um #chatView{display:flex}
+     incondicional tinha prioridade sobre .view{display:none} só por ser ID). */
+  #chatView.active { display: flex; flex-direction: column; }
 
   #chatView {
     max-width: 800px;
     margin: 0 auto;
     padding: 16px 24px;
-    display: flex;
-    flex-direction: column;
     height: calc(100vh - 110px);
   }
   #chatLog {
