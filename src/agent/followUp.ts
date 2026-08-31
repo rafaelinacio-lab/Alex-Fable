@@ -1,14 +1,19 @@
 /**
  * Motor da automação de cobrança de chamados aguardando retorno/validação do cliente.
  *
- * Roda por PERFIL (src/config/followUpProfiles.ts) — cada perfil é uma equipe com sua
- * própria regra de SLA (janela de expediente, prazo, status monitorados, remetente).
- * Isso existe porque, além da equipe "Sistemas Internos" original, o usuário pediu para
- * poder configurar outras equipes com SLAs diferentes pelo painel, sem mexer em código.
+ * Roda por PERFIL (src/config/followUpProfiles.ts) — cada perfil é um ESCOPO (uma equipe
+ * inteira, ou um owner/responsável específico — `scopeType`) com sua própria regra de
+ * SLA (janela de expediente, prazo, status monitorados, remetente). Isso existe porque,
+ * além da equipe "Sistemas Internos" original, o usuário pediu para poder configurar
+ * outras equipes (ou pessoas específicas) com SLAs diferentes pelo painel, sem mexer em
+ * código.
  *
  * Regra (confirmada com o usuário), dentro de CADA perfil:
- *  1. o chamado é da equipe (`ownerTeam`) daquele perfil — filtrado no servidor E de
- *     novo localmente (defesa em profundidade, mesmo padrão de only_open).
+ *  1. o chamado está dentro do escopo do perfil — `scopeType: "team"` restringe por
+ *     `ownerTeam` (filtrado no servidor E de novo localmente, defesa em profundidade,
+ *     mesmo padrão de only_open); `scopeType: "owner"` restringe pelo `owner.id` do
+ *     chamado, filtrado só localmente (ver nota em followUpProfiles.ts sobre não
+ *     inventar filtro OData por propriedade de navegação singular não confirmada).
  *  2. status do chamado é um dos monitorados pelo perfil (ex: "Aguardando Retorno do
  *     Cliente" / "Aguardando Validação do Cliente").
  *  3. a ÚLTIMA ação do chamado foi feita pelo OWNER (responsável) — se foi o cliente ou
@@ -53,6 +58,7 @@ export interface FollowUpTicketResult {
     | "skipped_within_threshold"
     | "skipped_no_data"
     | "skipped_wrong_team"
+    | "skipped_wrong_owner"
     | "error";
   errorMessage?: string;
 }
@@ -60,7 +66,8 @@ export interface FollowUpTicketResult {
 export interface FollowUpRunResult {
   profileId: string;
   profileName: string;
-  ownerTeam: string;
+  /** Descrição legível do escopo (equipe ou owner) — para exibição (chat/logs). */
+  scopeLabel: string;
   checkedCount: number;
   charged: FollowUpTicketResult[];
   skipped: FollowUpTicketResult[];
@@ -85,16 +92,23 @@ function latestByDate<T extends { createdDate?: string } | { changedDate?: strin
 /** Avalia um único ticket (já com actions/statusHistories expandidos) contra a regra de UM perfil. */
 export function evaluateTicket(
   ticket: TicketSummary,
-  profile: Pick<FollowUpProfile, "ownerTeam" | "thresholdBusinessDays" | "schedule">,
+  profile: Pick<FollowUpProfile, "scopeType" | "ownerTeam" | "ownerId" | "thresholdBusinessDays" | "schedule">,
   now: Date = new Date(),
 ): FollowUpTicketResult {
   const base = { id: ticket.id, subject: ticket.subject, status: ticket.status };
 
-  // Segunda verificação, além do $filter no servidor (defesa em profundidade — mesmo
-  // padrão já usado para "em aberto": nunca confiar só no OData para restringir escopo
-  // de uma mutação automática).
-  if (ticket.ownerTeam !== profile.ownerTeam) {
-    return { ...base, elapsedBusinessHours: 0, action: "skipped_wrong_team" };
+  // Filtro de escopo. Para "team", é uma SEGUNDA verificação além do $filter no servidor
+  // (defesa em profundidade — mesmo padrão já usado para "em aberto": nunca confiar só
+  // no OData para restringir escopo de uma mutação automática). Para "owner", é a ÚNICA
+  // camada de filtro (não há $filter de servidor para isso — ver followUpProfiles.ts).
+  if (profile.scopeType === "team") {
+    if (ticket.ownerTeam !== profile.ownerTeam) {
+      return { ...base, elapsedBusinessHours: 0, action: "skipped_wrong_team" };
+    }
+  } else {
+    if (ticket.owner?.id !== profile.ownerId) {
+      return { ...base, elapsedBusinessHours: 0, action: "skipped_wrong_owner" };
+    }
   }
 
   if (!ticket.owner?.id) {
@@ -175,8 +189,14 @@ async function chargeTicket(
   }
 }
 
+/** Descrição legível do escopo de um perfil, para exibição (chat/logs/painel). */
+export function describeScope(profile: Pick<FollowUpProfile, "scopeType" | "ownerTeam" | "ownerId" | "ownerName">): string {
+  if (profile.scopeType === "team") return profile.ownerTeam ?? "(equipe não definida)";
+  return profile.ownerName ? `${profile.ownerName} (${profile.ownerId})` : `owner ${profile.ownerId}`;
+}
+
 /**
- * Roda a verificação completa de UM perfil: busca os chamados da equipe/status dele,
+ * Roda a verificação completa de UM perfil: busca os chamados do escopo/status dele,
  * avalia a regra ticket a ticket, cobra os que qualificam, e devolve um resumo. Não
  * lança em caso de falha pontual num ticket — cada erro fica registrado em `errors`.
  */
@@ -186,12 +206,15 @@ export async function runFollowUpCheck(profile: FollowUpProfile): Promise<Follow
   const seenIds = new Set<number>();
 
   // Duas buscas separadas (uma por status) em vez de um único filtro com "or" — "or" não
-  // é operador confirmado nesta API (ver docs/movidesk-api-tickets.md, seção 6). O filtro
-  // por ownerTeam (via "and", operador confirmado) restringe a busca à equipe do perfil.
-  const teamFilter = `ownerTeam eq '${profile.ownerTeam.replace(/'/g, "''")}'`;
+  // é operador confirmado nesta API (ver docs/movidesk-api-tickets.md, seção 6). Escopo
+  // "team" acrescenta o filtro por ownerTeam (via "and", operador confirmado) direto na
+  // busca; escopo "owner" não filtra no servidor (ver nota em followUpProfiles.ts) — o
+  // filtro por owner.id acontece só em evaluateTicket, depois de buscar por status.
+  const scopeFilter =
+    profile.scopeType === "team" ? ` and ownerTeam eq '${(profile.ownerTeam ?? "").replace(/'/g, "''")}'` : "";
   for (const status of profile.waitingStatuses) {
     const result = await searchTicketsExhaustive({
-      filter: `status eq '${status.replace(/'/g, "''")}' and ${teamFilter}`,
+      filter: `status eq '${status.replace(/'/g, "''")}'${scopeFilter}`,
       select: ["id", "subject", "status", "owner", "ownerTeam"],
       expand: "actions,statusHistories",
     });
@@ -217,10 +240,12 @@ export async function runFollowUpCheck(profile: FollowUpProfile): Promise<Follow
     }
   }
 
+  const scopeLabel = describeScope(profile);
+
   const runResult: FollowUpRunResult = {
     profileId: profile.id,
     profileName: profile.name,
-    ownerTeam: profile.ownerTeam,
+    scopeLabel,
     checkedCount: allTickets.length,
     charged,
     skipped,
@@ -239,7 +264,7 @@ export async function runFollowUpCheck(profile: FollowUpProfile): Promise<Follow
     durationMs: 0,
     output: {
       profileId: profile.id,
-      ownerTeam: profile.ownerTeam,
+      scope: scopeLabel,
       checkedCount: runResult.checkedCount,
       chargedIds: charged.map((c) => c.id),
       errorIds: errors.map((e) => e.id),

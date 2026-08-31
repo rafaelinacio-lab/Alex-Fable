@@ -8,9 +8,20 @@
  *
  * Implementação: um array de perfis persistido em arquivo JSON local (mesmo padrão de
  * src/local/contacts.ts / src/store/idempotency.ts — troque por um banco real em
- * produção, mantendo esta mesma assinatura). Cada perfil é independente: equipe
- * (ownerTeam), status monitorados, prazo em dias úteis, sua PRÓPRIA janela de expediente
- * (schedule), intervalo de verificação, remetente e se está ligado.
+ * produção, mantendo esta mesma assinatura). Cada perfil é independente: escopo (uma
+ * EQUIPE inteira, ou um OWNER/responsável específico — ver `scopeType`), status
+ * monitorados, prazo em dias úteis, sua PRÓPRIA janela de expediente (schedule),
+ * intervalo de verificação, remetente e se está ligado.
+ *
+ * Escopo por owner (em vez de equipe): pedido do usuário para poder cobrar os chamados
+ * de UMA PESSOA específica, não só de uma equipe inteira. Diferente do escopo por
+ * equipe, não filtramos por owner no `$filter` OData — não há um exemplo confirmado na
+ * doc de filtro por propriedade de navegação singular (`owner/id eq '...'`, diferente de
+ * `clients/any(...)` que é array e está confirmado), então seguimos o mesmo princípio já
+ * usado em todo o projeto (nunca inventar sintaxe OData não confirmada): a busca traz os
+ * chamados só pelo `status`, e o filtro por owner acontece localmente em
+ * `evaluateTicket` (mesma ideia de `only_open`, só que aqui é a ÚNICA camada de filtro,
+ * não uma segunda em cima do servidor).
  *
  * O gate global `FOLLOWUP_AUTOMATION_ENABLED` (env) continua existindo como interruptor
  * geral — nenhum perfil roda se ele não for "true", mesmo que o perfil individual esteja
@@ -23,12 +34,20 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { SLA_SCHEDULE, type BusinessSchedule } from "../movidesk/businessHours.js";
 
+export type FollowUpScopeType = "team" | "owner";
+
 export interface FollowUpProfile {
   id: string;
   /** Rótulo livre, só para exibição no painel (ex: "Sistemas Internos"). */
   name: string;
-  /** Equipe (ownerTeam) à qual este perfil se restringe — nenhuma outra é tocada por ele. */
-  ownerTeam: string;
+  /** "team" restringe por ownerTeam; "owner" restringe por um responsável específico. */
+  scopeType: FollowUpScopeType;
+  /** Obrigatório quando scopeType === "team". Equipe à qual este perfil se restringe. */
+  ownerTeam?: string;
+  /** Obrigatório quando scopeType === "owner". cod_ref (id) do responsável na Movidesk. */
+  ownerId?: string;
+  /** Só para exibição no painel quando scopeType === "owner" (nome do responsável). */
+  ownerName?: string;
   enabled: boolean;
   waitingStatuses: string[];
   thresholdBusinessDays: number;
@@ -45,7 +64,18 @@ export interface FollowUpProfile {
 
 export type FollowUpProfileInput = Pick<
   FollowUpProfile,
-  "name" | "ownerTeam" | "enabled" | "waitingStatuses" | "thresholdBusinessDays" | "checkIntervalHours" | "reminderSenderId" | "reminderSenderName" | "schedule"
+  | "name"
+  | "scopeType"
+  | "ownerTeam"
+  | "ownerId"
+  | "ownerName"
+  | "enabled"
+  | "waitingStatuses"
+  | "thresholdBusinessDays"
+  | "checkIntervalHours"
+  | "reminderSenderId"
+  | "reminderSenderName"
+  | "schedule"
 >;
 
 const PROFILES_FILE = process.env.FOLLOWUP_PROFILES_FILE ?? "./data/local/followup_profiles.json";
@@ -64,6 +94,7 @@ function seedProfile(): FollowUpProfile {
   return {
     id: randomUUID(),
     name: "Sistemas Internos",
+    scopeType: "team",
     ownerTeam: process.env.FOLLOWUP_OWNER_TEAM ?? "VIASOFT - Sistemas Internos",
     enabled: true,
     waitingStatuses: DEFAULT_WAITING_STATUSES,
@@ -108,7 +139,13 @@ export async function getFollowUpProfile(id: string): Promise<FollowUpProfile | 
 
 function validateInput(input: FollowUpProfileInput): void {
   if (!input.name.trim()) throw new Error("Nome do perfil não pode ser vazio.");
-  if (!input.ownerTeam.trim()) throw new Error("ownerTeam (equipe) não pode ser vazio.");
+  if (input.scopeType === "team") {
+    if (!input.ownerTeam?.trim()) throw new Error("ownerTeam (equipe) não pode ser vazio quando o escopo é por equipe.");
+  } else if (input.scopeType === "owner") {
+    if (!input.ownerId?.trim()) throw new Error("ownerId (cod_ref do responsável) não pode ser vazio quando o escopo é por owner.");
+  } else {
+    throw new Error(`scopeType inválido: ${String(input.scopeType)} (use "team" ou "owner").`);
+  }
   if (!input.waitingStatuses.length) throw new Error("Informe ao menos um status monitorado.");
   if (input.thresholdBusinessDays <= 0) throw new Error("thresholdBusinessDays deve ser positivo.");
   if (input.checkIntervalHours <= 0) throw new Error("checkIntervalHours deve ser positivo.");

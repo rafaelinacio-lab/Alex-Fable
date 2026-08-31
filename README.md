@@ -143,22 +143,27 @@ Implementação: `src/agent/followUp.ts` (regra, roda por perfil),
 `src/config/followUp.ts` (interruptor geral).
 
 **Configuração pelo painel** (aba "Automação", `http://localhost:$DASHBOARD_PORT`): cada
-"perfil" é uma equipe com sua própria regra — nome, equipe (`ownerTeam`, tem que bater
-exatamente com o Movidesk), status monitorados, prazo em dias úteis, sua PRÓPRIA janela
-de expediente (manhã/tarde), intervalo de verificação e a identidade que assina a
-cobrança. Dá pra criar, editar, habilitar/desabilitar e excluir perfis sem mexer em
-código nem reiniciar o processo — é exatamente para isso que existe: hoje só
-"Sistemas Internos" está configurada, mas amanhã pode existir uma equipe com SLA
-diferente rodando ao lado, sem precisar alterar nada além do painel. Na primeira
-execução um perfil é criado sozinho para "VIASOFT - Sistemas Internos" (compatibilidade
+"perfil" tem um ESCOPO — **equipe inteira** (`ownerTeam`, tem que bater exatamente com o
+Movidesk) OU **um owner/responsável específico** (cod_ref daquela pessoa) — e sua própria
+regra: status monitorados, prazo em dias úteis, sua PRÓPRIA janela de expediente
+(manhã/tarde), intervalo de verificação e a identidade que assina a cobrança. O formulário
+do painel tem um seletor "Equipe inteira" / "Um owner específico" que troca os campos
+pedidos. Dá pra criar, editar, habilitar/desabilitar e excluir perfis sem mexer em código
+nem reiniciar o processo — é exatamente para isso que existe: hoje só "Sistemas Internos"
+está configurada, mas amanhã pode existir uma equipe (ou uma pessoa específica) com SLA
+diferente rodando ao lado, sem precisar alterar nada além do painel. Na primeira execução
+um perfil é criado sozinho para a equipe "VIASOFT - Sistemas Internos" (compatibilidade
 com a configuração anterior, que era fixa por variável de ambiente).
 
 **Regra**, aplicada dentro de CADA perfil: um chamado é cobrado quando, ao mesmo tempo:
 
-0. o chamado é da equipe daquele perfil — nenhuma outra é tocada por ele; o filtro é
-   aplicado tanto na busca (`$filter` OData) quanto localmente no código (defesa em
-   profundidade), então mesmo que o filtro do servidor falhasse silenciosamente, nenhum
-   chamado de outra equipe seria cobrado;
+0. o chamado está no escopo daquele perfil — nenhum chamado fora dele é tocado. Para
+   escopo por equipe, o filtro é aplicado tanto na busca (`$filter` OData) quanto
+   localmente no código (defesa em profundidade: mesmo que o filtro do servidor
+   falhasse silenciosamente, nenhum chamado de outra equipe seria cobrado). Para escopo
+   por owner, não existe um filtro OData confirmado por propriedade de navegação
+   singular (diferente do `clients/any(...)` que é array e está documentado) — então o
+   filtro por `owner.id` acontece só localmente, depois de buscar por status;
 1. o `status` é um dos monitorados por aquele perfil (padrão: "Aguardando Retorno do
    Cliente" ou "Aguardando Validação do Cliente");
 2. a ÚLTIMA ação do chamado foi feita pelo `owner` (responsável) — se o cliente (ou
@@ -179,9 +184,9 @@ já não bate mais para aquele chamado (a última ação passa a ser da própria
 ### Onde acompanhar no painel
 
 - **Aba "Automação"**: lista todos os perfis, com o estado do interruptor geral no
-  topo, um card por equipe (status monitorados, prazo, expediente, intervalo, remetente,
-  última execução) e botões para Editar, Rodar agora e Excluir cada um; o botão "+ Novo
-  perfil" cria outra equipe do zero.
+  topo, um card por perfil (escopo — equipe ou owner —, status monitorados, prazo,
+  expediente, intervalo, remetente, última execução) e botões para Editar, Rodar agora e
+  Excluir cada um; o botão "+ Novo perfil" cria outro escopo do zero.
 - **Aba "Conversa"**: ao fim de cada rodada, aparece um aviso em itálico marcado como
   "automação" com o resumo daquele perfil — quantos chamados foram verificados, quais
   foram cobrados (`#id`), e falhas, se houver. É publicado direto pelo processo

@@ -165,10 +165,21 @@ configurar isso pelo painel e poder ter várias equipes com SLAs diferentes no f
 por isso a configuração por equipe virou um array de "perfis" persistido e editável via
 API (`/api/followup/profiles`, aba "Automação" do painel), em vez de env vars fixas.
 
-**Regra** (confirmada com o usuário), aplicada dentro de CADA perfil: restrita à equipe
-(`ownerTeam`) daquele perfil, filtrada tanto no `$filter` OData quanto de novo localmente
-em `evaluateTicket` (defesa em profundidade, mesmo padrão já usado para `only_open`).
-Dentro dessa equipe, um chamado no status monitorado por aquele perfil (padrão:
+**Escopo por perfil — equipe ou owner** (`scopeType: "team" | "owner"`): pedido do
+usuário para poder restringir a automação também a UM responsável específico, não só a
+uma equipe inteira. Escopo `"team"` filtra por `ownerTeam` daquele perfil, tanto no
+`$filter` OData quanto de novo localmente em `evaluateTicket` (defesa em profundidade,
+mesmo padrão já usado para `only_open`). Escopo `"owner"` filtra por `ownerId` (cod_ref
+do responsável) SÓ localmente — não há um exemplo confirmado na doc de filtro OData por
+propriedade de navegação singular (`owner/id eq '...'`, diferente do `clients/any(...)`
+que é array e está confirmado), então a busca traz os chamados só pelo `status` e o
+filtro por owner acontece inteiramente em `evaluateTicket` (`describeScope()` gera o
+rótulo legível — "Equipe X" ou "Fulano (cod_ref)" — usado nos anúncios e no painel).
+`FollowUpProfileInput`/`validateInput` exigem `ownerTeam` quando o escopo é `"team"` e
+`ownerId` quando é `"owner"`, nunca os dois.
+
+**Regra** (confirmada com o usuário), aplicada dentro de CADA perfil, dentro do escopo
+acima: um chamado no status monitorado por aquele perfil (padrão:
 "Aguardando Retorno do Cliente"/"Aguardando Validação do Cliente") é cobrado quando a
 última ação foi do `owner` (não do cliente — indica silêncio real, não resposta ainda não
 refletida no status) E o tempo decorrido desde a mais recente entre essa ação e a entrada
@@ -325,6 +336,16 @@ Registro do que já foi corrigido, para não reintroduzir os mesmos problemas:
     passou a "bater" (tick) com frequência curta e fixa, decidindo a cada batida quais
     perfis já venceram o próprio intervalo — necessário porque perfis diferentes podem
     ter intervalos diferentes.
+17. **Escopo por owner, além de por equipe**: o usuário pediu para poder configurar a
+    automação também por um responsável específico, não só por equipe inteira.
+    `FollowUpProfile` ganhou `scopeType: "team" | "owner"` — "team" continua usando
+    `ownerTeam` (filtrado no `$filter` OData + localmente); "owner" usa `ownerId`
+    (cod_ref do responsável), filtrado SÓ localmente em `evaluateTicket`, porque não há
+    um exemplo confirmado de filtro OData por propriedade de navegação singular
+    (`owner/id eq`) na documentação — mesma cautela já aplicada a `serviceFull`/`or`/`ne`
+    em outras partes do projeto. `validateInput` passou a exigir um campo ou outro
+    conforme o escopo, nunca os dois. O painel ganhou um seletor "Equipe inteira" / "Um
+    owner específico" no formulário de perfil, que troca os campos pedidos.
 
 ## 9. Limitações conhecidas
 

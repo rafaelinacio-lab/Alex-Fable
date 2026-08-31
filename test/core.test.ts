@@ -393,6 +393,7 @@ test("evaluateTicket (cobrança automática): só cobra quando última ação é
   const now = new Date("2026-04-08T15:00:00Z"); // quarta-feira, 12:00 local
 
   const profile = {
+    scopeType: "team" as const,
     ownerTeam: "VIASOFT - Sistemas Internos",
     thresholdBusinessDays: 3,
     schedule: SLA_SCHEDULE,
@@ -444,10 +445,35 @@ test("evaluateTicket (cobrança automática): só cobra quando última ação é
   assert.equal(evaluateTicket(outraEquipe, profile, now).action, "skipped_wrong_team");
 });
 
+test("evaluateTicket com escopo por owner: cobra só chamados daquele responsável específico, ignorando a equipe", () => {
+  const now = new Date("2026-04-08T15:00:00Z");
+  const perfilPorOwner = {
+    scopeType: "owner" as const,
+    ownerId: "007-owner",
+    thresholdBusinessDays: 3,
+    schedule: SLA_SCHEDULE,
+  };
+  const vencido = {
+    id: 1,
+    subject: "Chamado teste",
+    status: "Aguardando Retorno do Cliente",
+    ownerTeam: "VIASOFT - Sistemas Internos", // equipe é irrelevante nesse escopo
+    owner: { id: "007-owner" },
+    actions: [{ createdDate: "2026-04-01T15:00:00Z", createdBy: { id: "007-owner" } }],
+    statusHistories: [{ status: "Aguardando Retorno do Cliente", changedDate: "2026-04-01T15:00:00Z" }],
+  };
+  assert.equal(evaluateTicket(vencido, perfilPorOwner, now).action, "charged");
+
+  // Mesma equipe, mas owner diferente do configurado -> nunca cobra por esse perfil.
+  const outroOwner = { ...vencido, id: 2, owner: { id: "outro-owner" }, actions: [{ ...vencido.actions[0], createdBy: { id: "outro-owner" } }] };
+  assert.equal(evaluateTicket(outroOwner, perfilPorOwner, now).action, "skipped_wrong_owner");
+});
+
 test("evaluateTicket respeita a janela de expediente PRÓPRIA do perfil (SLAs diferentes por equipe)", () => {
   // Perfil com expediente maior (08:00-20:00, sem intervalo) -> mesmo prazo em DIAS úteis
   // vence mais rápido em horas de relógio do que o perfil padrão (525min/dia).
   const perfilExpedienteLongo = {
+    scopeType: "team" as const,
     ownerTeam: "Equipe Plantão",
     thresholdBusinessDays: 1,
     schedule: { morningStart: 8 * 60, morningEnd: 12 * 60, afternoonStart: 12 * 60, afternoonEnd: 20 * 60 },
@@ -483,6 +509,7 @@ test("followUpProfiles: CRUD completo persiste em disco e valida a janela de exp
 
   const input = {
     name: "Equipe Teste",
+    scopeType: "team" as const,
     ownerTeam: "VIASOFT - Equipe Teste",
     enabled: true,
     waitingStatuses: ["Aguardando Retorno do Cliente"],
@@ -510,6 +537,21 @@ test("followUpProfiles: CRUD completo persiste em disco e valida a janela de exp
     createFollowUpProfile({ ...input, schedule: { ...input.schedule, morningEnd: 100 } }),
   );
 
+  // Escopo "owner" exige ownerId (não ownerTeam); escopo "team" sem ownerTeam é rejeitado.
+  await assert.rejects(() =>
+    createFollowUpProfile({ ...input, scopeType: "owner", ownerId: undefined }),
+  );
+  const porOwner = await createFollowUpProfile({
+    ...input,
+    name: "Owner Teste",
+    scopeType: "owner",
+    ownerTeam: undefined,
+    ownerId: "007-owner",
+    ownerName: "Fulano de Tal",
+  });
+  assert.equal(porOwner.ownerId, "007-owner");
+  await deleteFollowUpProfile(porOwner.id);
+
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -534,6 +576,7 @@ test("painel: API /api/followup/profiles faz CRUD via HTTP (aba Automação)", a
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name: "Equipe HTTP",
+        scopeType: "team",
         ownerTeam: "VIASOFT - Equipe HTTP",
         enabled: true,
         waitingStatuses: ["Aguardando Retorno do Cliente"],

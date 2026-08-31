@@ -18,7 +18,7 @@
 
 import { isFollowUpAutomationEnabled } from "../config/followUp.js";
 import { listFollowUpProfiles, type FollowUpProfile } from "../config/followUpProfiles.js";
-import { runFollowUpCheck, type FollowUpRunResult } from "./followUp.js";
+import { runFollowUpCheck, describeScope, type FollowUpRunResult } from "./followUp.js";
 
 export interface FollowUpScheduler {
   stop(): void;
@@ -28,7 +28,7 @@ const TICK_MINUTES = Number(process.env.FOLLOWUP_TICK_MINUTES ?? 15);
 
 function summarize(result: FollowUpRunResult): string {
   const lines = [
-    `[${result.profileName} / ${result.ownerTeam}] Verificação automática de cobrança concluída.`,
+    `[${result.profileName} / ${result.scopeLabel}] Verificação automática de cobrança concluída.`,
     `Chamados verificados: ${result.checkedCount}.`,
   ];
   if (result.charged.length > 0) {
@@ -88,7 +88,7 @@ export function startFollowUpScheduler(announce: (text: string) => void): Follow
         announce(summarize(result));
       } catch (err) {
         announce(
-          `⚠ Verificação automática de cobrança falhou para "${profile.name}" (${profile.ownerTeam}): ${err instanceof Error ? err.message : String(err)}`,
+          `⚠ Verificação automática de cobrança falhou para "${profile.name}" (${describeScope(profile)}): ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     }
