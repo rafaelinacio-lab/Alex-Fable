@@ -10,10 +10,10 @@
  *
  * Regra (confirmada com o usuário), dentro de CADA perfil:
  *  1. o chamado está dentro do escopo do perfil — `scopeType: "team"` restringe por
- *     `ownerTeam` (filtrado no servidor E de novo localmente, defesa em profundidade,
- *     mesmo padrão de only_open); `scopeType: "owner"` restringe pelo `owner.id` do
- *     chamado, filtrado só localmente (ver nota em followUpProfiles.ts sobre não
- *     inventar filtro OData por propriedade de navegação singular não confirmada).
+ *     `ownerTeam`, `scopeType: "owner"` por `owner.id` do chamado; ambos filtrados no
+ *     servidor E de novo localmente (defesa em profundidade, mesmo padrão de only_open —
+ *     ver nota em followUpProfiles.ts sobre `owner/id eq '...'` ter sido confirmado ao
+ *     vivo, apesar de não documentado publicamente).
  *  2. status do chamado é um dos monitorados pelo perfil, E — se o perfil configurar
  *     `waitingJustifications` — o `justification` do chamado também bate. Em vários
  *     tenants (confirmado em produção real) o `status` é genérico (ex: "Aguardando") e
@@ -113,10 +113,10 @@ export function evaluateTicket(
 ): FollowUpTicketResult {
   const base = { id: ticket.id, subject: ticket.subject, status: ticket.status };
 
-  // Filtro de escopo. Para "team", é uma SEGUNDA verificação além do $filter no servidor
-  // (defesa em profundidade — mesmo padrão já usado para "em aberto": nunca confiar só
-  // no OData para restringir escopo de uma mutação automática). Para "owner", é a ÚNICA
-  // camada de filtro (não há $filter de servidor para isso — ver followUpProfiles.ts).
+  // Filtro de escopo — SEGUNDA verificação além do $filter no servidor (tanto "team"
+  // quanto "owner" já filtram lá, ver runFollowUpCheck), defesa em profundidade: mesmo
+  // padrão já usado para "em aberto", nunca confiar só no OData para restringir o escopo
+  // de uma mutação automática.
   if (profile.scopeType === "team") {
     if (ticket.ownerTeam !== profile.ownerTeam) {
       return { ...base, elapsedBusinessHours: 0, action: "skipped_wrong_team" };
@@ -284,11 +284,17 @@ export async function runFollowUpCheck(profile: FollowUpProfile): Promise<Follow
 
   // Duas buscas separadas (uma por status) em vez de um único filtro com "or" — "or" não
   // é operador confirmado nesta API (ver docs/movidesk-api-tickets.md, seção 6). Escopo
-  // "team" acrescenta o filtro por ownerTeam (via "and", operador confirmado) direto na
-  // busca; escopo "owner" não filtra no servidor (ver nota em followUpProfiles.ts) — o
-  // filtro por owner.id acontece só em evaluateTicket, depois de buscar por status.
+  // "team" acrescenta o filtro por ownerTeam; escopo "owner" acrescenta por owner/id —
+  // ambos via "and" direto na busca (confirmado ao vivo, docs/movidesk-api-tickets.md
+  // seção 6.7: `owner/id eq '...'` funciona, embora não fosse documentado publicamente;
+  // `owner.id`/`ownerId` foram testados e devolvem 400). Mesmo com o filtro no servidor,
+  // evaluateTicket confere de novo localmente (defesa em profundidade, mesmo padrão do
+  // "em aberto") — nunca confiar só no $filter para restringir o escopo de uma mutação
+  // automática.
   const scopeFilter =
-    profile.scopeType === "team" ? ` and ownerTeam eq '${(profile.ownerTeam ?? "").replace(/'/g, "''")}'` : "";
+    profile.scopeType === "team"
+      ? ` and ownerTeam eq '${(profile.ownerTeam ?? "").replace(/'/g, "''")}'`
+      : ` and owner/id eq '${(profile.ownerId ?? "").replace(/'/g, "''")}'`;
   for (const status of profile.waitingStatuses) {
     const result = await searchTicketsExhaustive({
       filter: `status eq '${status.replace(/'/g, "''")}'${scopeFilter}`,

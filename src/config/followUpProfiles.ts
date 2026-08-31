@@ -14,14 +14,15 @@
  * intervalo de verificação, remetente e se está ligado.
  *
  * Escopo por owner (em vez de equipe): pedido do usuário para poder cobrar os chamados
- * de UMA PESSOA específica, não só de uma equipe inteira. Diferente do escopo por
- * equipe, não filtramos por owner no `$filter` OData — não há um exemplo confirmado na
- * doc de filtro por propriedade de navegação singular (`owner/id eq '...'`, diferente de
- * `clients/any(...)` que é array e está confirmado), então seguimos o mesmo princípio já
- * usado em todo o projeto (nunca inventar sintaxe OData não confirmada): a busca traz os
- * chamados só pelo `status`, e o filtro por owner acontece localmente em
- * `evaluateTicket` (mesma ideia de `only_open`, só que aqui é a ÚNICA camada de filtro,
- * não uma segunda em cima do servidor).
+ * de UMA PESSOA específica, não só de uma equipe inteira. A doc pública só documenta
+ * filtro por coleção (`clients/any(...)`), não por propriedade de navegação singular —
+ * mas testamos `owner/id eq '<COD_REF>'` ao vivo (2026-08-31, tenant VIASOFT) e funciona
+ * (docs/movidesk-api-tickets.md, seção 6.7; `owner.id`/`ownerId` foram testados e dão
+ * 400 — só a sintaxe com barra é aceita). `runFollowUpCheck` usa esse filtro no servidor
+ * (evita paginar a base inteira só para descartar quase tudo localmente — chegou a levar
+ * ~15 páginas/minutos para achar ~10 chamados de um owner num tenant com 1400+ tickets
+ * "Aguardando"), e `evaluateTicket` confere `owner.id` de novo localmente, mesmo padrão
+ * de defesa em profundidade já usado para `ownerTeam`.
  *
  * O gate global `FOLLOWUP_AUTOMATION_ENABLED` (env) continua existindo como interruptor
  * geral — nenhum perfil roda se ele não for "true", mesmo que o perfil individual esteja

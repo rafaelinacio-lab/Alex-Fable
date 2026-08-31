@@ -270,6 +270,25 @@ GET /tickets
 
 ---
 
+## 6.7 Filtrar por propriedade de navegação singular (não documentado, confirmado ao vivo)
+
+A doc pública só documenta filtro por coleção (`clients/any(...)`, seção 6.6). Para uma
+propriedade de navegação **singular** como `owner`, testamos ao vivo (2026-08-31, tenant
+VIASOFT) e `owner/id eq '<COD_REF>'` **funciona** — devolve exatamente os mesmos tickets
+que filtrar `owner.id` localmente após buscar por status, só que numa única chamada em
+vez de paginar a base inteira. `owner.id eq '...'` (ponto) e `ownerId eq '...'` (campo
+escalar) foram testados e devolvem 400 — só a sintaxe com barra (`owner/id`), igual ao
+padrão de `any()`, é aceita.
+
+```text
+$filter=status eq 'Aguardando' and owner/id eq '57991'
+```
+
+Não testado para outras propriedades de navegação singular (ex: `createdBy/id`) — não
+assuma que funciona por analogia sem confirmar da mesma forma.
+
+---
+
 # 7. GET `/tickets/htmldescription` — HTML de uma ação
 
 Na leitura normal:
