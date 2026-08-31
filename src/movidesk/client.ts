@@ -234,7 +234,23 @@ async function requestInner<T>(opts: RequestOptions): Promise<T> {
     }
 
     if (response.status === 204) return undefined as T;
-    return (await response.json()) as T;
+
+    // IMPORTANTE (confirmado ao vivo em PATCH /tickets): o Movidesk pode devolver 200
+    // com corpo VAZIO em vez de 204 — response.json() numa string vazia lança
+    // "Unexpected end of JSON input" DEPOIS que a mutação já foi aplicada com sucesso no
+    // servidor. Sem isso, uma cobrança automática (ou qualquer PATCH) aparecia como erro
+    // no painel mesmo já tendo sido enviada de verdade ao ticket — o pior tipo de falso
+    // negativo, porque parece seguro tentar de novo quando não é. Lemos como texto
+    // primeiro e só tentamos JSON se houver conteúdo; corpo vazio = sucesso sem dados.
+    const rawText = await response.text();
+    if (!rawText) return undefined as T;
+    try {
+      return JSON.parse(rawText) as T;
+    } catch {
+      throw new Error(
+        `Resposta ${response.status} do Movidesk em ${opts.method} ${opts.path} não é JSON válido (a operação pode já ter sido aplicada no servidor). Corpo: ${rawText.slice(0, 500)}`,
+      );
+    }
   }
 
   throw lastError instanceof Error ? lastError : new Error("Falha desconhecida ao chamar Movidesk.");
