@@ -27,6 +27,15 @@
  * geral — nenhum perfil roda se ele não for "true", mesmo que o perfil individual esteja
  * `enabled: true` no painel. É a camada de segurança que impede uma automação nova de
  * começar a falar com clientes reais sozinha só por já existir configurada.
+ *
+ * `waitingJustifications` (opcional): confirmado em produção real (tenant VIASOFT) que
+ * `status` sozinho pode ser genérico (ex: "Aguardando", baseStatus "Stopped") e é o campo
+ * `justification` que diz a razão específica (ex: "Validação Cliente", "Retorno
+ * Cliente") — sem isso, filtrar só por texto de `status` nunca encontra nada nesses
+ * tenants. Quando preenchido, um chamado só é considerado se `ticket.justification`
+ * estiver nessa lista (filtro só local, em `evaluateTicket` — ver nota abaixo sobre não
+ * inventar `or` no `$filter`); vazio/omitido = não filtra por justificativa (tenants
+ * onde o `status` já é descritivo o bastante sozinho).
  */
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -50,6 +59,8 @@ export interface FollowUpProfile {
   ownerName?: string;
   enabled: boolean;
   waitingStatuses: string[];
+  /** Ver nota no topo do arquivo — filtro adicional por `justification`, opcional. */
+  waitingJustifications?: string[];
   thresholdBusinessDays: number;
   checkIntervalHours: number;
   reminderSenderId: string;
@@ -71,6 +82,7 @@ export type FollowUpProfileInput = Pick<
   | "ownerName"
   | "enabled"
   | "waitingStatuses"
+  | "waitingJustifications"
   | "thresholdBusinessDays"
   | "checkIntervalHours"
   | "reminderSenderId"

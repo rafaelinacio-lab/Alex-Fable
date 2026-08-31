@@ -178,11 +178,25 @@ rótulo legível — "Equipe X" ou "Fulano (cod_ref)" — usado nos anúncios e 
 `FollowUpProfileInput`/`validateInput` exigem `ownerTeam` quando o escopo é `"team"` e
 `ownerId` quando é `"owner"`, nunca os dois.
 
+**Status vs. justification**: confirmado em produção real (tenant VIASOFT) que `status`
+pode ser genérico (ex: "Aguardando", `baseStatus` "Stopped") para QUALQUER pausa, e a
+razão específica (retorno vs. validação do cliente) fica no campo `justification` (ex:
+"Validação Cliente") — um bug real já visto foi configurar `waitingStatuses` com o texto
+"Aguardando Retorno do Cliente" como se fosse o `status` literal, que nunca existe assim
+nesse tenant, zerando sempre o resultado. Por isso `FollowUpProfile` ganhou
+`waitingJustifications?: string[]` — quando preenchido, `evaluateTicket` também exige
+`ticket.justification` estar nessa lista (filtro só local, mesmo princípio de não montar
+`or` no `$filter`); vazio/omitido preserva o comportamento antigo (filtra só por
+`status`). O `$select` de `runFollowUpCheck` passou a incluir `justification`, e o
+casamento de `statusHistories` (para achar a data de entrada na permanência atual)
+também passou a considerar `justification`, não só `status` — evita pegar a data errada
+quando o mesmo status genérico é reusado por motivos diferentes ao longo do histórico.
+
 **Regra** (confirmada com o usuário), aplicada dentro de CADA perfil, dentro do escopo
-acima: um chamado no status monitorado por aquele perfil (padrão:
-"Aguardando Retorno do Cliente"/"Aguardando Validação do Cliente") é cobrado quando a
-última ação foi do `owner` (não do cliente — indica silêncio real, não resposta ainda não
-refletida no status) E o tempo decorrido desde a mais recente entre essa ação e a entrada
+acima: um chamado no status (e justification, se configurado) monitorado por aquele
+perfil é cobrado quando a última ação foi do `owner` (não do cliente — indica silêncio
+real, não resposta ainda não refletida no status) E o tempo decorrido desde a mais
+recente entre essa ação e a entrada
 no status atual (`statusHistories`) passa do prazo (dias úteis) configurado NAQUELE
 perfil, contado pela JANELA DE EXPEDIENTE PRÓPRIA dele (`profile.schedule` — não uma
 constante global; `businessDaysToMinutes`/`businessMinutesElapsed` recebem o schedule do
@@ -358,6 +372,22 @@ Registro do que já foi corrigido, para não reintroduzir os mesmos problemas:
     em outras partes do projeto. `validateInput` passou a exigir um campo ou outro
     conforme o escopo, nunca os dois. O painel ganhou um seletor "Equipe inteira" / "Um
     owner específico" no formulário de perfil, que troca os campos pedidos.
+18. **`status` vs. `justification`** (bug real em produção, ver seção 6.1): rodando o
+    perfil real da equipe Sistemas Internos, `checkedCount` sempre vinha 0. O diagnóstico
+    automático (item anterior a este, `diagnoseEmptyResult`) apontou corretamente:
+    nenhum chamado com o `status` configurado ("Aguardando Retorno do Cliente") existia
+    em toda a base. Investigando um chamado real (o usuário forneceu o JSON completo de
+    um chamado "aguardando validação"), a causa ficou clara: nesse tenant o `status` é
+    genérico ("Aguardando", `baseStatus` "Stopped") e a razão específica mora no campo
+    `justification` ("Validação Cliente"). `FollowUpProfile` ganhou
+    `waitingJustifications?: string[]` (filtro adicional, só local, mesmo princípio de
+    nunca montar `or` no `$filter`); `TicketSummary` ganhou o campo `justification`; o
+    `$select` de `runFollowUpCheck` passou a pedir esse campo; e o casamento de
+    `statusHistories` em `evaluateTicket` passou a considerar `justification` também (não
+    só `status`), para não pegar a data de entrada errada quando o mesmo status genérico
+    é reusado por motivos diferentes. Também reforçado no diagnóstico automático e na
+    dica do formulário do painel — esta classe de erro (assumir que `status` já é
+    descritivo) é esperada em outros tenants/equipes também.
 
 ## 9. Limitações conhecidas
 

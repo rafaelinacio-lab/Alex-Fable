@@ -164,8 +164,15 @@ com a configuração anterior, que era fixa por variável de ambiente).
    por owner, não existe um filtro OData confirmado por propriedade de navegação
    singular (diferente do `clients/any(...)` que é array e está documentado) — então o
    filtro por `owner.id` acontece só localmente, depois de buscar por status;
-1. o `status` é um dos monitorados por aquele perfil (padrão: "Aguardando Retorno do
-   Cliente" ou "Aguardando Validação do Cliente");
+1. o `status` é um dos monitorados por aquele perfil, E — se o perfil configurar
+   "Justificativas monitoradas" — o campo `justification` do chamado também bate.
+   **Importante**: em vários tenants (confirmado em produção real) o `status` sozinho é
+   genérico (ex: "Aguardando", `baseStatus` "Stopped") e é o `justification` que diz a
+   razão específica (ex: "Validação Cliente", "Retorno Cliente"). Antes de configurar um
+   perfil, busque um chamado real nessa situação e confira os dois campos — configurar só
+   pelo texto do `status` supondo que ele já é descritivo (ex: "Aguardando Retorno do
+   Cliente" como se fosse o texto literal do status) é a causa mais comum de a automação
+   rodar e não encontrar nenhum chamado;
 2. a ÚLTIMA ação do chamado foi feita pelo `owner` (responsável) — se o cliente (ou
    qualquer outra pessoa) foi quem agiu por último, o chamado não é cobrado (pode ser
    que o cliente já tenha respondido e o status só não foi atualizado ainda);

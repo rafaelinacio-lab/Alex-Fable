@@ -668,3 +668,49 @@ test("runFollowUpCheck: quando não encontra nenhum chamado, roda diagnóstico e
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("evaluateTicket com waitingJustifications: distingue por 'justification' quando 'status' é genérico (bug real de produção)", () => {
+  // Regressão de um bug real: um tenant usa status genérico ("Aguardando", baseStatus
+  // "Stopped") para QUALQUER pausa, e o motivo específico (retorno vs validação do
+  // cliente) fica em `justification`. Filtrar só por status (ex: "Aguardando Retorno do
+  // Cliente" como se fosse o texto literal do status) nunca encontra nada nesse tenant.
+  const now = new Date("2026-09-04T15:00:00Z"); // sexta-feira, 12:00 local — dias úteis depois de 28/08
+
+  const perfilComJustification = {
+    scopeType: "team" as const,
+    ownerTeam: "VIASOFT - Sistemas Internos",
+    waitingJustifications: ["Validação Cliente"],
+    thresholdBusinessDays: 3,
+    schedule: SLA_SCHEDULE,
+  };
+
+  const ticket = {
+    id: 894793,
+    subject: "[Movidesk] usuário quer permissão para ser administrador",
+    status: "Aguardando",
+    justification: "Validação Cliente",
+    ownerTeam: "VIASOFT - Sistemas Internos",
+    owner: { id: "1562521409" },
+    actions: [
+      { createdDate: "2026-08-28T11:33:44.5745442Z", createdBy: { id: "e4eaea2a-a1d2-4848-" } },
+      { createdDate: "2026-08-31T12:20:04.8637998Z", createdBy: { id: "1562521409" } }, // última ação é do owner
+    ],
+    statusHistories: [
+      { status: "Novo", justification: null, changedDate: "2026-08-28T11:33:44.2738089Z" },
+      { status: "Aguardando", justification: "Validação Cliente", changedDate: "2026-08-28T11:36:34.0306053Z" },
+      { status: "Em atendimento", justification: "Respondido pelo cliente", changedDate: "2026-08-28T11:38:18.5009192Z" },
+      { status: "Aguardando", justification: "Validação Cliente", changedDate: "2026-08-28T13:03:27.2566814Z" },
+    ],
+  };
+
+  // Vencido (mais de 3 dias úteis desde 28/08) e justification bate -> cobra.
+  assert.equal(evaluateTicket(ticket, perfilComJustification, now).action, "charged");
+
+  // Mesmo chamado, mas o perfil só monitora outra justificativa -> nunca cobra por esse perfil.
+  const outroPerfil = { ...perfilComJustification, waitingJustifications: ["Retorno Cliente"] };
+  assert.equal(evaluateTicket(ticket, outroPerfil, now).action, "skipped_wrong_justification");
+
+  // Sem waitingJustifications configurado (comportamento antigo) -> ignora o campo, só olha status.
+  const perfilSemJustification = { ...perfilComJustification, waitingJustifications: undefined };
+  assert.equal(evaluateTicket(ticket, perfilSemJustification, now).action, "charged");
+});

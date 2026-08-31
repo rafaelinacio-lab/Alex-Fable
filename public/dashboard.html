@@ -773,6 +773,9 @@
         "</div></div>" +
         '<div class="profile-meta">' +
         "<span>Status monitorados: <b>" + escapeHtml(p.waitingStatuses.join(", ")) + "</b></span>" +
+        (p.waitingJustifications && p.waitingJustifications.length
+          ? "<span>Justificativas: <b>" + escapeHtml(p.waitingJustifications.join(", ")) + "</b></span>"
+          : "") +
         "<span>Prazo: <b>" + p.thresholdBusinessDays + " dia(s) útil(eis)</b></span>" +
         "<span>Expediente: <b>" + minutesToHHMM(p.schedule.morningStart) + "–" + minutesToHHMM(p.schedule.morningEnd) +
         " e " + minutesToHHMM(p.schedule.afternoonStart) + "–" + minutesToHHMM(p.schedule.afternoonEnd) + "</b></span>" +
@@ -848,6 +851,7 @@
       ownerName: "",
       enabled: true,
       waitingStatuses: ["Aguardando Retorno do Cliente", "Aguardando Validação do Cliente"],
+      waitingJustifications: [],
       thresholdBusinessDays: 3,
       checkIntervalHours: 24,
       reminderSenderId: "007",
@@ -869,6 +873,7 @@
       '<label id="pf-ownerid-wrap">Owner — cod_ref (id)<input id="pf-ownerid" value="' + escapeAttr(v.ownerId || "") + '"></label>' +
       '<label id="pf-ownername-wrap">Owner — nome (só exibição)<input id="pf-ownername" value="' + escapeAttr(v.ownerName || "") + '"></label>' +
       '<label>Status monitorados (separados por vírgula)<input id="pf-statuses" value="' + escapeAttr(v.waitingStatuses.join(", ")) + '"></label>' +
+      '<label>Justificativas monitoradas (opcional, separadas por vírgula)<input id="pf-justifications" value="' + escapeAttr((v.waitingJustifications || []).join(", ")) + '"></label>' +
       '<label>Prazo (dias úteis)<input id="pf-threshold" type="number" min="1" value="' + v.thresholdBusinessDays + '"></label>' +
       '<label>Verificar a cada (horas)<input id="pf-interval" type="number" min="1" value="' + v.checkIntervalHours + '"></label>' +
       '<label>Remetente — cod_ref<input id="pf-senderid" value="' + escapeAttr(v.reminderSenderId) + '"></label>' +
@@ -877,7 +882,7 @@
       '<label>Expediente manhã — fim<input id="pf-m-end" type="time" value="' + minutesToHHMM(v.schedule.morningEnd) + '"></label>' +
       '<label>Expediente tarde — início<input id="pf-a-start" type="time" value="' + minutesToHHMM(v.schedule.afternoonStart) + '"></label>' +
       '<label>Expediente tarde — fim<input id="pf-a-end" type="time" value="' + minutesToHHMM(v.schedule.afternoonEnd) + '"></label>' +
-      '<div class="form-hint">Escopo "Equipe inteira" verifica todos os chamados de um ownerTeam; "Um owner específico" verifica só os chamados de UM responsável (útil quando o SLA depende da pessoa, não da equipe toda). Janela de expediente é o SLA próprio deste perfil — seg-sex, os fins de semana já são sempre excluídos. "Prazo" é contado nessas horas úteis, não em dias corridos.</div>' +
+      '<div class="form-hint">Escopo "Equipe inteira" verifica todos os chamados de um ownerTeam; "Um owner específico" verifica só os chamados de UM responsável (útil quando o SLA depende da pessoa, não da equipe toda). Em alguns tenants o "Status" do chamado é genérico (ex: "Aguardando") e a razão específica fica no campo "Justificativa" (ex: "Validação Cliente") — se for o seu caso, coloque o status genérico em "Status monitorados" e as razões exatas em "Justificativas monitoradas"; deixe vazio se o seu "Status" já é descritivo por si só. Janela de expediente é o SLA próprio deste perfil — seg-sex, os fins de semana já são sempre excluídos. "Prazo" é contado nessas horas úteis, não em dias corridos.</div>' +
       "</div>" +
       '<div id="pf-error" class="form-error" hidden></div>' +
       '<div class="form-buttons">' +
@@ -909,6 +914,7 @@
         ownerName: scopeType === "owner" ? wrap.querySelector("#pf-ownername").value.trim() : undefined,
         enabled: v.enabled,
         waitingStatuses: wrap.querySelector("#pf-statuses").value.split(",").map((s) => s.trim()).filter(Boolean),
+        waitingJustifications: wrap.querySelector("#pf-justifications").value.split(",").map((s) => s.trim()).filter(Boolean),
         thresholdBusinessDays: Number(wrap.querySelector("#pf-threshold").value),
         checkIntervalHours: Number(wrap.querySelector("#pf-interval").value),
         reminderSenderId: wrap.querySelector("#pf-senderid").value.trim(),

@@ -14,8 +14,14 @@
  *     mesmo padrão de only_open); `scopeType: "owner"` restringe pelo `owner.id` do
  *     chamado, filtrado só localmente (ver nota em followUpProfiles.ts sobre não
  *     inventar filtro OData por propriedade de navegação singular não confirmada).
- *  2. status do chamado é um dos monitorados pelo perfil (ex: "Aguardando Retorno do
- *     Cliente" / "Aguardando Validação do Cliente").
+ *  2. status do chamado é um dos monitorados pelo perfil, E — se o perfil configurar
+ *     `waitingJustifications` — o `justification` do chamado também bate. Em vários
+ *     tenants (confirmado em produção real) o `status` é genérico (ex: "Aguardando") e
+ *     é o `justification` que diz a razão específica (ex: "Validação Cliente", "Retorno
+ *     Cliente") — sem checar `justification` também, o filtro nunca encontra nada
+ *     nesses tenants (bug real já visto: perfil configurado com
+ *     status:["Aguardando Retorno do Cliente", ...] sempre retornava zero, porque esse
+ *     texto nunca existe como `status` — a distinção real estava no `justification`).
  *  3. a ÚLTIMA ação do chamado foi feita pelo OWNER (responsável) — se foi o cliente ou
  *     qualquer outra pessoa, o chamado não entra (o cliente já pode ter respondido e o
  *     status só não foi atualizado ainda).
@@ -59,6 +65,7 @@ export interface FollowUpTicketResult {
     | "skipped_no_data"
     | "skipped_wrong_team"
     | "skipped_wrong_owner"
+    | "skipped_wrong_justification"
     | "error";
   errorMessage?: string;
 }
@@ -98,7 +105,10 @@ function latestByDate<T extends { createdDate?: string } | { changedDate?: strin
 /** Avalia um único ticket (já com actions/statusHistories expandidos) contra a regra de UM perfil. */
 export function evaluateTicket(
   ticket: TicketSummary,
-  profile: Pick<FollowUpProfile, "scopeType" | "ownerTeam" | "ownerId" | "thresholdBusinessDays" | "schedule">,
+  profile: Pick<
+    FollowUpProfile,
+    "scopeType" | "ownerTeam" | "ownerId" | "waitingJustifications" | "thresholdBusinessDays" | "schedule"
+  >,
   now: Date = new Date(),
 ): FollowUpTicketResult {
   const base = { id: ticket.id, subject: ticket.subject, status: ticket.status };
@@ -117,6 +127,12 @@ export function evaluateTicket(
     }
   }
 
+  // Filtro por justification (opcional) — só local, nunca via $filter (ver nota no topo
+  // do arquivo e em followUpProfiles.ts sobre não montar "or" no OData).
+  if (profile.waitingJustifications?.length && !profile.waitingJustifications.includes(ticket.justification ?? "")) {
+    return { ...base, elapsedBusinessHours: 0, action: "skipped_wrong_justification" };
+  }
+
   if (!ticket.owner?.id) {
     return { ...base, elapsedBusinessHours: 0, action: "skipped_no_data" };
   }
@@ -130,9 +146,15 @@ export function evaluateTicket(
     return { ...base, elapsedBusinessHours: 0, action: "skipped_owner_not_last" };
   }
 
-  // Entre as entradas de statusHistories que batem o status ATUAL do ticket, pega a mais
-  // recente — representa quando o chamado entrou na permanência atual nesse status.
-  const matchingStatusEntries = (ticket.statusHistories ?? []).filter((h) => h.status === ticket.status);
+  // Entre as entradas de statusHistories que batem o status (E o justification, quando
+  // presente) ATUAIS do ticket, pega a mais recente — representa quando o chamado entrou
+  // na permanência atual nessa combinação. Comparar só por status seria impreciso em
+  // tenants onde o mesmo status genérico (ex: "Aguardando") é reusado para razões
+  // diferentes (justification) — pegaria a data errada se o chamado já passou por lá
+  // antes por outro motivo.
+  const matchingStatusEntries = (ticket.statusHistories ?? []).filter(
+    (h) => h.status === ticket.status && (!ticket.justification || h.justification === ticket.justification),
+  );
   const statusEntry = latestByDate<TicketStatusHistoryEntry>(matchingStatusEntries, "changedDate");
 
   const actionDate = new Date(lastAction.createdDate);
@@ -227,7 +249,8 @@ async function diagnoseEmptyResult(profile: FollowUpProfile): Promise<string[]> 
 
     if (totalByStatusOnly === 0) {
       notes.push(
-        `Nenhum chamado encontrado com o(s) status monitorado(s) (${profile.waitingStatuses.map((s) => `"${s}"`).join(" ou ")}) em TODA a base, mesmo sem filtrar por ${profile.scopeType === "team" ? "equipe" : "owner"}. Confira se o texto do status bate EXATAMENTE (maiúsculas/minúsculas e espaços importam) com o status configurado no Movidesk — o filtro usa comparação exata (eq).`,
+        `Nenhum chamado encontrado com o(s) status monitorado(s) (${profile.waitingStatuses.map((s) => `"${s}"`).join(" ou ")}) em TODA a base, mesmo sem filtrar por ${profile.scopeType === "team" ? "equipe" : "owner"}. Confira se o texto do status bate EXATAMENTE (maiúsculas/minúsculas e espaços importam) com o status configurado no Movidesk — o filtro usa comparação exata (eq). ` +
+          `Causa comum: neste tenant o campo "status" pode ser genérico (ex: "Aguardando") e a razão específica ("aguardando retorno" vs "aguardando validação") ficar no campo "justification" — busque um chamado real e confira; se for esse o caso, ajuste "Status monitorados" para o texto genérico e preencha "Justificativas monitoradas" com as razões exatas.`,
       );
     } else if (profile.scopeType === "team") {
       const sample = [...teamsSeen].slice(0, 8);
@@ -269,7 +292,7 @@ export async function runFollowUpCheck(profile: FollowUpProfile): Promise<Follow
   for (const status of profile.waitingStatuses) {
     const result = await searchTicketsExhaustive({
       filter: `status eq '${status.replace(/'/g, "''")}'${scopeFilter}`,
-      select: ["id", "subject", "status", "owner", "ownerTeam"],
+      select: ["id", "subject", "status", "justification", "owner", "ownerTeam"],
       expand: "actions,statusHistories",
     });
     for (const ticket of result.tickets) {

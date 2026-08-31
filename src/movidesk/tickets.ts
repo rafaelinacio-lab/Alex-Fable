@@ -79,6 +79,13 @@ export interface TicketSummary {
   id: number;
   subject: string;
   status: string;
+  /**
+   * Motivo específico de por que o chamado está no status atual — em muitos tenants
+   * (confirmado em produção real, ver src/agent/followUp.ts) o `status` em si é genérico
+   * (ex: "Aguardando") e é o `justification` que diz a razão (ex: "Validação Cliente",
+   * "Retorno Cliente"). Não assuma que o `status` sozinho descreve a situação.
+   */
+  justification?: string | null;
   baseStatus?: string;
   ownerTeam?: string;
   owner?: { id: string; businessName?: string };
