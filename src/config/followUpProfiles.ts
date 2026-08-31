@@ -62,7 +62,10 @@ export interface FollowUpProfile {
   waitingStatuses: string[];
   /** Ver nota no topo do arquivo — filtro adicional por `justification`, opcional. */
   waitingJustifications?: string[];
-  thresholdBusinessDays: number;
+  /** Prazo de silêncio (do owner) em HORAS ÚTEIS — não dias, para poder expressar valores
+   * exatos como 24 (confirmado com o usuário) em vez de uma aproximação em dias úteis
+   * cheios (24h úteis não é um número redondo de dias úteis num expediente de 8h45). */
+  thresholdBusinessHours: number;
   checkIntervalHours: number;
   reminderSenderId: string;
   reminderSenderName: string;
@@ -84,7 +87,7 @@ export type FollowUpProfileInput = Pick<
   | "enabled"
   | "waitingStatuses"
   | "waitingJustifications"
-  | "thresholdBusinessDays"
+  | "thresholdBusinessHours"
   | "checkIntervalHours"
   | "reminderSenderId"
   | "reminderSenderName"
@@ -121,7 +124,9 @@ function seedProfile(): FollowUpProfile {
     enabled: true,
     waitingStatuses: DEFAULT_WAITING_STATUSES,
     waitingJustifications: DEFAULT_WAITING_JUSTIFICATIONS,
-    thresholdBusinessDays: Number(process.env.FOLLOWUP_THRESHOLD_BUSINESS_DAYS ?? 3),
+    // 24h úteis: regra confirmada com o usuário (2026-08-31) — cobra quando a última ação
+    // foi do owner e nenhum cliente do ticket respondeu há mais de 24 HORAS ÚTEIS.
+    thresholdBusinessHours: Number(process.env.FOLLOWUP_THRESHOLD_BUSINESS_HOURS ?? 24),
     checkIntervalHours: Number(process.env.FOLLOWUP_CHECK_INTERVAL_HOURS ?? 24),
     reminderSenderId: process.env.FOLLOWUP_SENDER_COD_REF ?? "007",
     reminderSenderName: "Alex Fable",
@@ -170,7 +175,7 @@ function validateInput(input: FollowUpProfileInput): void {
     throw new Error(`scopeType inválido: ${String(input.scopeType)} (use "team" ou "owner").`);
   }
   if (!input.waitingStatuses.length) throw new Error("Informe ao menos um status monitorado.");
-  if (input.thresholdBusinessDays <= 0) throw new Error("thresholdBusinessDays deve ser positivo.");
+  if (input.thresholdBusinessHours <= 0) throw new Error("thresholdBusinessHours deve ser positivo.");
   if (input.checkIntervalHours <= 0) throw new Error("checkIntervalHours deve ser positivo.");
   if (!input.reminderSenderId.trim()) throw new Error("reminderSenderId (cod_ref) não pode ser vazio.");
   const { morningStart, morningEnd, afternoonStart, afternoonEnd } = input.schedule;

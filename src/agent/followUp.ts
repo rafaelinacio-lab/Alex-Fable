@@ -28,7 +28,9 @@
  *  4. o tempo decorrido desde a referência (a mais recente entre a data da última ação
  *     do owner e a data em que o chamado entrou no status atual), contado em HORAS
  *     ÚTEIS pela janela de expediente DESTE perfil (não a de outro perfil, nem uma
- *     global fixa — src/movidesk/businessHours.ts), é >= ao limite configurado nele.
+ *     global fixa — src/movidesk/businessHours.ts), é >= ao limite configurado nele
+ *     (`thresholdBusinessHours` — confirmado com o usuário: 24h úteis por padrão, não
+ *     dias úteis aproximados).
  *
  * Cada chamado que bate as quatro condições recebe uma ação pública automática (ver
  * buildFollowUpMessage), criada pela identidade dedicada configurada NO PERFIL — nunca
@@ -44,7 +46,7 @@ import {
   type TicketActionSummary,
   type TicketStatusHistoryEntry,
 } from "../movidesk/tickets.js";
-import { businessMinutesElapsed, businessDaysToMinutes } from "../movidesk/businessHours.js";
+import { businessMinutesElapsed } from "../movidesk/businessHours.js";
 import { buildFollowUpMessage, isFollowUpAutomationEnabled } from "../config/followUp.js";
 import { listFollowUpProfiles, markFollowUpProfileRan, type FollowUpProfile } from "../config/followUpProfiles.js";
 import { recordAuditEvent, hashPayload, newCorrelationId } from "../store/audit.js";
@@ -107,7 +109,7 @@ export function evaluateTicket(
   ticket: TicketSummary,
   profile: Pick<
     FollowUpProfile,
-    "scopeType" | "ownerTeam" | "ownerId" | "waitingJustifications" | "thresholdBusinessDays" | "schedule"
+    "scopeType" | "ownerTeam" | "ownerId" | "waitingJustifications" | "thresholdBusinessHours" | "schedule"
   >,
   now: Date = new Date(),
 ): FollowUpTicketResult {
@@ -162,7 +164,9 @@ export function evaluateTicket(
   const reference = statusDate && statusDate > actionDate ? statusDate : actionDate;
 
   const elapsedMinutes = businessMinutesElapsed(reference, now, { schedule: profile.schedule });
-  const thresholdMinutes = businessDaysToMinutes(profile.thresholdBusinessDays, profile.schedule);
+  // Horas úteis -> minutos é só *60 (não precisa da janela de expediente para essa
+  // conversão — diferente de "dias úteis", que dependia do tamanho do expediente).
+  const thresholdMinutes = profile.thresholdBusinessHours * 60;
   const elapsedBusinessHours = Math.round((elapsedMinutes / 60) * 10) / 10;
 
   if (elapsedMinutes < thresholdMinutes) {

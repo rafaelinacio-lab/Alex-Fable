@@ -129,3 +129,58 @@ export function businessMinutesElapsed(
 export function businessDaysToMinutes(days: number, schedule: BusinessSchedule = SLA_SCHEDULE): number {
   return days * minutesPerBusinessDay(schedule);
 }
+
+/**
+ * Projeta `from` para a frente por `minutesToAdd` MINUTOS ÚTEIS (pulando fins de semana e
+ * fora do expediente), devolvendo o instante (UTC) em que esse prazo se esgota — ex: "a
+ * cobrança foi às 18h de sexta, prazo de 8h úteis" cai na segunda de manhã, não sábado.
+ * Usado para mostrar ao usuário QUANDO (data/hora real) um chamado cobrado será encerrado
+ * automaticamente, em vez de só "quantas horas úteis faltam" (menos legível num painel).
+ *
+ * `minutesToAdd <= 0` devolve `from` sem alteração. Teto de segurança de 3650 dias
+ * corridos (evita loop infinito com expediente mal configurado — mesmo princípio de
+ * `maxPages` em buscas exaustivas); nesse caso devolve o melhor instante alcançado.
+ */
+export function addBusinessMinutes(
+  from: Date,
+  minutesToAdd: number,
+  opts?: { schedule?: BusinessSchedule; holidays?: Set<string> },
+): Date {
+  const schedule = opts?.schedule ?? SLA_SCHEDULE;
+  const holidays = opts?.holidays ?? new Set<string>();
+  if (minutesToAdd <= 0) return new Date(from);
+
+  let remaining = minutesToAdd;
+  let cursorLocal = toLocal(from);
+  const segments: Array<[number, number]> = [
+    [schedule.morningStart, schedule.morningEnd],
+    [schedule.afternoonStart, schedule.afternoonEnd],
+  ];
+
+  for (let day = 0; day < 3650; day++) {
+    if (!isWeekend(cursorLocal) && !holidays.has(dateKey(cursorLocal))) {
+      const dayStartMin = day === 0 ? minutesSinceMidnight(cursorLocal) : 0;
+      for (const [segStart, segEnd] of segments) {
+        const from_ = Math.max(dayStartMin, segStart);
+        const available = segEnd - from_;
+        if (available <= 0) continue;
+        if (remaining <= available) {
+          const targetMinutes = from_ + remaining;
+          const resultLocal = new Date(cursorLocal);
+          resultLocal.setUTCHours(0, 0, 0, 0);
+          resultLocal.setUTCMinutes(Math.round(targetMinutes));
+          return new Date(resultLocal.getTime() - TIMEZONE_OFFSET_MINUTES * 60_000);
+        }
+        remaining -= available;
+      }
+    }
+    const next = new Date(cursorLocal);
+    next.setUTCDate(next.getUTCDate() + 1);
+    next.setUTCHours(0, 0, 0, 0);
+    cursorLocal = next;
+  }
+
+  // Teto de segurança atingido (expediente/entrada absurda) — devolve o melhor instante
+  // alcançado em vez de travar; quem chamar deve tratar isso como aproximado.
+  return new Date(cursorLocal.getTime() - TIMEZONE_OFFSET_MINUTES * 60_000);
+}
