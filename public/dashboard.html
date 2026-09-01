@@ -408,24 +408,21 @@
 
 <div id="chargesView" class="view">
   <div id="autoCloseGateBanner" class="gate-banner"></div>
-  <div class="profiles-toolbar">
-    <div class="sub" style="color:var(--muted); font-size:12px;">
-      Chamados que já receberam a cobrança automática — e, quando o fechamento automático está ligado, quanto falta até serem encerrados por falta de retorno.
-    </div>
-    <button class="btn" id="refreshChargesBtn">Atualizar</button>
-  </div>
-  <div id="chargesList"></div>
 
-  <div class="run-section">
-    <h3>Última verificação de cobrança (por perfil)</h3>
-    <div class="sub">Todo chamado examinado na última rodada de cada perfil — inclusive os que NÃO foram cobrados, com o motivo.</div>
+  <div class="run-section" style="margin-top:0;">
+    <h3>Última verificação (por perfil)</h3>
+    <div class="sub">Todo chamado examinado na última rodada de cada perfil — cobrado, fechado, ou pulado (com o motivo) — com quanto falta para cobrar/fechar cada um.</div>
+    <div class="profiles-toolbar">
+      <span></span>
+      <button class="btn" id="refreshChargesBtn">Atualizar</button>
+    </div>
     <div id="chargeRunsWrap"></div>
   </div>
 
   <div class="run-section">
-    <h3>Última verificação de fechamento</h3>
-    <div class="sub">Todo chamado já cobrado que foi examinado na última rodada de fechamento — inclusive os que NÃO foram encerrados, com o motivo.</div>
-    <div id="closeRunWrap"></div>
+    <h3>Histórico de cobranças enviadas</h3>
+    <div class="sub">Quando cada chamado recebeu a mensagem de cobrança (não recalcula prazo — isso está na tabela acima, sempre a partir do estado real do chamado).</div>
+    <div id="chargesList"></div>
   </div>
 </div>
 
@@ -835,8 +832,8 @@
         (p.waitingJustifications && p.waitingJustifications.length
           ? "<span>Justificativas: <b>" + escapeHtml(p.waitingJustifications.join(", ")) + "</b></span>"
           : "") +
-        "<span>Prazo: <b>" + p.thresholdBusinessHours + "h útil(eis)</b></span>" +
-        "<span>Fechamento automático: <b>" + (p.autoCloseEnabled ? "ligado" : "desligado") + "</b></span>" +
+        "<span>Prazo de cobrança: <b>" + p.thresholdBusinessHours + "h útil(eis)</b></span>" +
+        "<span>Fechamento automático: <b>" + (p.autoCloseEnabled ? "ligado (" + p.autoCloseThresholdBusinessDays + " dia(s) útil(eis))" : "desligado") + "</b></span>" +
         "<span>Expediente: <b>" + minutesToHHMM(p.schedule.morningStart) + "–" + minutesToHHMM(p.schedule.morningEnd) +
         " e " + minutesToHHMM(p.schedule.afternoonStart) + "–" + minutesToHHMM(p.schedule.afternoonEnd) + "</b></span>" +
         "<span>Verifica a cada <b>" + p.checkIntervalHours + "h</b></span>" +
@@ -925,6 +922,7 @@
       waitingStatuses: ["Aguardando Retorno do Cliente", "Aguardando Validação do Cliente"],
       waitingJustifications: [],
       thresholdBusinessHours: 24,
+      autoCloseThresholdBusinessDays: 3,
       checkIntervalHours: 24,
       reminderSenderId: "007",
       reminderSenderName: "Alex Fable",
@@ -946,7 +944,8 @@
       '<label id="pf-ownername-wrap">Owner — nome (só exibição)<input id="pf-ownername" value="' + escapeAttr(v.ownerName || "") + '"></label>' +
       '<label>Status monitorados (separados por vírgula)<input id="pf-statuses" value="' + escapeAttr(v.waitingStatuses.join(", ")) + '"></label>' +
       '<label>Justificativas monitoradas (opcional, separadas por vírgula)<input id="pf-justifications" value="' + escapeAttr((v.waitingJustifications || []).join(", ")) + '"></label>' +
-      '<label>Prazo (horas úteis)<input id="pf-threshold" type="number" min="1" value="' + v.thresholdBusinessHours + '"></label>' +
+      '<label>Prazo de cobrança (horas úteis)<input id="pf-threshold" type="number" min="1" value="' + v.thresholdBusinessHours + '"></label>' +
+      '<label>Prazo de fechamento automático (dias úteis)<input id="pf-close-threshold" type="number" min="1" value="' + v.autoCloseThresholdBusinessDays + '"></label>' +
       '<label>Verificar a cada (horas)<input id="pf-interval" type="number" min="1" value="' + v.checkIntervalHours + '"></label>' +
       '<label>Remetente — cod_ref<input id="pf-senderid" value="' + escapeAttr(v.reminderSenderId) + '"></label>' +
       '<label>Remetente — nome<input id="pf-sendername" value="' + escapeAttr(v.reminderSenderName) + '"></label>' +
@@ -989,6 +988,7 @@
         waitingStatuses: wrap.querySelector("#pf-statuses").value.split(",").map((s) => s.trim()).filter(Boolean),
         waitingJustifications: wrap.querySelector("#pf-justifications").value.split(",").map((s) => s.trim()).filter(Boolean),
         thresholdBusinessHours: Number(wrap.querySelector("#pf-threshold").value),
+        autoCloseThresholdBusinessDays: Number(wrap.querySelector("#pf-close-threshold").value),
         checkIntervalHours: Number(wrap.querySelector("#pf-interval").value),
         reminderSenderId: wrap.querySelector("#pf-senderid").value.trim(),
         reminderSenderName: wrap.querySelector("#pf-sendername").value.trim(),
@@ -1021,102 +1021,91 @@
     return escapeHtml(s).replace(/"/g, "&quot;");
   }
 
-  // --- aba "Cobranças" (chamados que já receberam a ação automática) ---
+  // --- aba "Cobranças" (o que a automação examinou/cobrou/fechou na última verificação) ---
   const chargesList = document.getElementById("chargesList");
   const autoCloseGateBanner = document.getElementById("autoCloseGateBanner");
   const refreshChargesBtn = document.getElementById("refreshChargesBtn");
   const chargeRunsWrap = document.getElementById("chargeRunsWrap");
-  const closeRunWrap = document.getElementById("closeRunWrap");
   let latestCharges = [];
-  let chargesCountdownTimer = null;
 
   const CHARGE_ACTION_LABEL = {
     charged: "Cobrado agora",
+    closed: "Encerrado agora (falta de retorno)",
     skipped_owner_not_last: "Cliente (ou outra pessoa) respondeu por último",
     skipped_within_threshold: "Ainda dentro do prazo",
     skipped_no_data: "Sem dado suficiente (sem owner/ação)",
     skipped_wrong_team: "Fora do escopo (equipe)",
     skipped_wrong_owner: "Fora do escopo (owner)",
     skipped_wrong_justification: "Justificativa não monitorada",
-    error: "Erro ao cobrar",
-  };
-  const CLOSE_ACTION_LABEL = {
-    closed: "Encerrado agora",
-    responded: "Cliente respondeu — não fecha",
-    resolved_externally: "Resolvido manualmente — não fecha",
-    within_threshold: "Ainda dentro do prazo",
-    orphan_profile: "Perfil da cobrança foi excluído",
-    disabled: "Fechamento desligado nesse perfil",
-    error: "Erro ao fechar",
+    error: "Erro (cobrança ou fechamento)",
   };
 
-  function runTable(tickets, actionLabels) {
-    if (!tickets.length) return '<div class="empty">Nenhum chamado nesta rodada.</div>';
-    const rows = tickets
-      .map(
-        (t) =>
+  // "Faltam Xh" — sempre em horas ÚTEIS (mesma unidade de elapsedBusinessHours), não
+  // relógio corrido; por isso não precisa de um timer client-side, só recalcula a cada
+  // "Atualizar" ou rodada nova. Vazio quando não se aplica (já cobrado/fechado/erro, ou
+  // fechamento desligado nesse perfil).
+  function fmtRemaining(elapsedHours, thresholdHours) {
+    if (typeof elapsedHours !== "number") return "—";
+    const remaining = Math.round((thresholdHours - elapsedHours) * 10) / 10;
+    return remaining <= 0 ? "vencido" : "faltam " + remaining + "h úteis";
+  }
+
+  function runTable(run) {
+    if (!run.tickets.length) return '<div class="empty">Nenhum chamado nesta rodada.</div>';
+    const openActions = new Set(["skipped_within_threshold", "skipped_owner_not_last"]);
+    const rows = run.tickets
+      .map((t) => {
+        const stillOpen = openActions.has(t.action);
+        return (
           "<tr><td>#" + t.id + "</td><td class=\"subject\">" + escapeHtml(t.subject || "") + "</td><td>" +
-          escapeHtml(actionLabels[t.action] || t.action) + "</td><td>" +
-          (typeof t.elapsedBusinessHours === "number" ? t.elapsedBusinessHours + "h" : "—") + "</td>" +
+          escapeHtml(CHARGE_ACTION_LABEL[t.action] || t.action) + "</td><td>" +
+          (typeof t.elapsedBusinessHours === "number" ? t.elapsedBusinessHours + "h" : "—") + "</td><td>" +
+          (stillOpen ? fmtRemaining(t.elapsedBusinessHours, run.thresholdBusinessHours) : "—") + "</td><td>" +
+          (stillOpen && run.autoCloseEnabled ? fmtRemaining(t.elapsedBusinessHours, run.autoCloseThresholdHours) : "—") + "</td>" +
           (t.errorMessage ? '<td style="color:var(--err)">' + escapeHtml(t.errorMessage) + "</td>" : "<td>—</td>") +
-          "</tr>",
-      )
+          "</tr>"
+        );
+      })
       .join("");
     return (
       '<div class="run-table-wrap"><table class="run-table"><thead><tr>' +
-      "<th>Chamado</th><th>Assunto</th><th>Resultado</th><th>Horas úteis decorridas</th><th>Detalhe</th>" +
+      "<th>Chamado</th><th>Assunto</th><th>Resultado</th><th>Horas úteis decorridas</th>" +
+      "<th>P/ cobrar</th><th>P/ fechar</th><th>Detalhe</th>" +
       "</tr></thead><tbody>" + rows + "</tbody></table></div>"
     );
   }
 
   function renderChargeRuns(runs) {
     if (!runs.length) {
-      chargeRunsWrap.innerHTML = '<div class="empty">Nenhuma verificação de cobrança rodou ainda.</div>';
+      chargeRunsWrap.innerHTML = '<div class="empty">Nenhuma verificação rodou ainda.</div>';
       return;
     }
     chargeRunsWrap.innerHTML = runs
       .map(
         (r) =>
           '<div class="charge-sub" style="margin:14px 0 6px;">' + escapeHtml(r.profileName) + " · " + escapeHtml(r.scopeLabel) +
-          " — verificado em " + new Date(r.ranAt).toLocaleString("pt-BR") + " (" + r.checkedCount + " chamado(s))</div>" +
-          runTable(r.tickets, CHARGE_ACTION_LABEL),
+          " — verificado em " + new Date(r.ranAt).toLocaleString("pt-BR") + " (" + r.checkedCount + " chamado(s)) · " +
+          "cobra com " + r.thresholdBusinessHours + "h úteis" +
+          (r.autoCloseEnabled ? " · fecha com " + r.autoCloseThresholdHours + "h úteis" : " · fechamento desligado") +
+          "</div>" + runTable(r),
       )
       .join("");
   }
-
-  function renderCloseRun(run) {
-    if (!run) {
-      closeRunWrap.innerHTML = '<div class="empty">Nenhuma verificação de fechamento rodou ainda.</div>';
-      return;
-    }
-    closeRunWrap.innerHTML =
-      '<div class="charge-sub" style="margin-bottom:6px;">Verificado em ' + new Date(run.ranAt).toLocaleString("pt-BR") +
-      " (" + run.checkedCount + " chamado(s))</div>" + runTable(run.tickets, CLOSE_ACTION_LABEL);
-  }
-
-  const CHARGE_STATUS_LABEL = {
-    pending: "Aguardando resposta",
-    responded: "Cliente respondeu",
-    closed: "Encerrado automaticamente",
-    closed_error: "Falha ao encerrar",
-    resolved_externally: "Resolvido manualmente",
-  };
 
   function renderAutoCloseGateBanner(enabled) {
     autoCloseGateBanner.className = "gate-banner " + (enabled ? "on" : "off");
     autoCloseGateBanner.innerHTML =
       '<span class="gate-dot"></span><span>' +
       (enabled
-        ? "Fechamento automático LIGADO globalmente (FOLLOWUP_AUTOCLOSE_ENABLED=true). Chamados de perfis com o switch de fechamento marcado serão encerrados sozinhos ao vencer o prazo."
+        ? "Fechamento automático LIGADO globalmente (FOLLOWUP_AUTOCLOSE_ENABLED=true). Perfis com o switch de fechamento marcado encerram chamados sozinhos ao vencer o prazo."
         : "Fechamento automático DESLIGADO globalmente (FOLLOWUP_AUTOCLOSE_ENABLED não é \"true\" no ambiente). " +
-          "Os prazos abaixo são só informativos — nenhum chamado é encerrado sozinho enquanto isso não mudar no .env.") +
+          "A coluna \"P/ fechar\" abaixo não aparece enquanto isso não mudar no .env — nenhum chamado é encerrado sozinho.") +
       "</span>";
   }
 
   async function loadCharges() {
     chargesList.innerHTML = '<div class="empty">Carregando…</div>';
     chargeRunsWrap.innerHTML = '<div class="empty">Carregando…</div>';
-    closeRunWrap.innerHTML = '<div class="empty">Carregando…</div>';
     try {
       const [chargesRes, lastRunsRes] = await Promise.all([
         fetch("/api/followup/charges"),
@@ -1126,30 +1115,13 @@
       renderAutoCloseGateBanner(data.autoCloseEnabled);
       latestCharges = data.charges || [];
       renderCharges();
-      if (chargesCountdownTimer) clearInterval(chargesCountdownTimer);
-      chargesCountdownTimer = setInterval(updateCountdowns, 1000);
 
       const lastRuns = await lastRunsRes.json();
       renderChargeRuns(lastRuns.chargeRuns || []);
-      renderCloseRun(lastRuns.closeRun);
     } catch (err) {
       chargesList.innerHTML = '<div class="empty">Falha ao carregar cobranças: ' + escapeHtml(String(err)) + "</div>";
       chargeRunsWrap.innerHTML = "";
-      closeRunWrap.innerHTML = "";
     }
-  }
-
-  function fmtCountdown(deadlineIso) {
-    const diffMs = new Date(deadlineIso).getTime() - Date.now();
-    if (diffMs <= 0) return "prazo vencido (processando na próxima checagem)";
-    const totalMin = Math.floor(diffMs / 60000);
-    const days = Math.floor(totalMin / (24 * 60));
-    const hours = Math.floor((totalMin % (24 * 60)) / 60);
-    const mins = totalMin % 60;
-    const parts = [];
-    if (days > 0) parts.push(days + "d");
-    parts.push(hours + "h", mins + "m");
-    return "faltam " + parts.join(" ") + " (relógio corrido; o prazo em si é contado em horas úteis)";
   }
 
   function renderCharges() {
@@ -1163,31 +1135,18 @@
     for (const c of sorted) {
       const card = document.createElement("div");
       card.className = "charge-card";
-      const badgeClass = c.status;
       card.innerHTML =
         '<div class="charge-head">' +
         '<div><div class="charge-title">#' + c.ticketId + " — " + escapeHtml(c.subject || "") + '</div>' +
         '<div class="charge-sub">' + escapeHtml(c.profileName) + (c.ownerTeam ? " · " + escapeHtml(c.ownerTeam) : "") + '</div></div>' +
-        '<span class="charge-badge ' + badgeClass + '">' + (CHARGE_STATUS_LABEL[c.status] || c.status) + "</span>" +
+        '<span class="charge-badge ' + c.status + '">' + (c.status === "closed" ? "Encerrado" : "Aguardando resposta") + "</span>" +
         "</div>" +
         '<div class="charge-meta">' +
         "<span>Cobrado em: <b>" + new Date(c.chargedAt).toLocaleString("pt-BR") + "</b></span>" +
-        (c.status === "pending"
-          ? '<span>Fechamento automático: <b class="charge-countdown" data-deadline="' + c.deadlineAt + '">' +
-            fmtCountdown(c.deadlineAt) + "</b></span>"
-          : c.resolvedAt
-            ? "<span>Desde: <b>" + new Date(c.resolvedAt).toLocaleString("pt-BR") + "</b></span>"
-            : "") +
-        (c.closeError ? '<span style="color:var(--err)">Erro: <b>' + escapeHtml(c.closeError) + "</b></span>" : "") +
+        (c.resolvedAt ? "<span>Encerrado em: <b>" + new Date(c.resolvedAt).toLocaleString("pt-BR") + "</b></span>" : "") +
         "</div>";
       chargesList.appendChild(card);
     }
-  }
-
-  function updateCountdowns() {
-    chargesList.querySelectorAll(".charge-countdown[data-deadline]").forEach((el) => {
-      el.textContent = fmtCountdown(el.dataset.deadline);
-    });
   }
 
   refreshChargesBtn.addEventListener("click", loadCharges);

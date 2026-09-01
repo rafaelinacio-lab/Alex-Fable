@@ -2,17 +2,20 @@
  * "Última verificação" — o que a automação examinou na rodada mais recente, mesmo os
  * chamados que ela decidiu NÃO tocar (dentro do prazo, justification errada, etc).
  *
- * Existe porque `FollowUpRunResult`/`AutoCloseRunResult` (ver src/agent/followUp.ts e
- * src/agent/followUpClose.ts) só existiam como retorno de função — visíveis na hora
- * (alert do painel, resumo na aba Conversa, evento na aba Atividade), mas não ficavam
- * consultáveis depois. Pedido do usuário: uma área no painel para ver quais chamados
- * foram PROCESSADOS na última rodada (não só os cobrados/fechados), quanto falta para
- * encerrar, e quando foi a última cobrança — as duas últimas já vêm de
- * src/store/followUpCharges.ts; isto aqui cobre "quais foram processados".
+ * Existe porque `FollowUpRunResult` (ver src/agent/followUp.ts) só existia como retorno
+ * de função — visível na hora (alert do painel, resumo na aba Conversa, evento na aba
+ * Atividade), mas não ficava consultável depois. Pedido do usuário: uma área no painel
+ * para ver quais chamados foram PROCESSADOS na última rodada (não só os
+ * cobrados/fechados) e quanto falta para cobrar/encerrar cada um.
  *
- * Guarda só a ÚLTIMA rodada de cada tipo (sobrescreve, não acumula histórico) — é uma
+ * Guarda só a ÚLTIMA rodada de cada perfil (sobrescreve, não acumula histórico) — é uma
  * foto do estado mais recente, não um log de auditoria (isso já existe em
  * src/store/audit.ts para as mutações reais).
+ *
+ * Os limiares (`thresholdBusinessHours`/`autoCloseThresholdHours`) ficam gravados AQUI,
+ * junto com cada rodada — snapshot do que foi de fato usado naquela verificação — para o
+ * painel calcular "faltam Xh para cobrar/fechar" sem precisar reconsultar o perfil (que
+ * pode já ter sido editado desde então).
  */
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -33,17 +36,18 @@ export interface ChargeRunLog {
   scopeLabel: string;
   ranAt: string;
   checkedCount: number;
-  tickets: RunLogTicket[];
-}
-
-export interface CloseRunLog {
-  ranAt: string;
-  checkedCount: number;
+  /** Prazo de cobrança usado nesta rodada, em horas úteis. */
+  thresholdBusinessHours: number;
+  /** Se o fechamento automático estava ligado (perfil E gate global) nesta rodada. */
+  autoCloseEnabled: boolean;
+  /** Prazo de fechamento usado nesta rodada, já convertido para horas úteis (a partir de
+   * `autoCloseThresholdBusinessDays` + o expediente do perfil) — evita o painel precisar
+   * conhecer a janela de expediente só para essa conta. */
+  autoCloseThresholdHours: number;
   tickets: RunLogTicket[];
 }
 
 const CHARGE_RUNS_FILE = process.env.FOLLOWUP_LAST_CHARGE_RUNS_FILE ?? "./data/local/followup_last_charge_runs.json";
-const CLOSE_RUN_FILE = process.env.FOLLOWUP_LAST_CLOSE_RUN_FILE ?? "./data/local/followup_last_close_run.json";
 
 async function readJson<T>(file: string, fallback: T): Promise<T> {
   try {
@@ -59,7 +63,7 @@ async function writeJson(file: string, data: unknown): Promise<void> {
   await writeFile(file, JSON.stringify(data, null, 2), "utf8");
 }
 
-/** Grava a última rodada de COBRANÇA de um perfil, substituindo a anterior DAQUELE perfil. */
+/** Grava a última rodada de cobrança/fechamento de um perfil, substituindo a anterior DAQUELE perfil. */
 export async function recordChargeRun(entry: ChargeRunLog, file = CHARGE_RUNS_FILE): Promise<void> {
   const all = await readJson<ChargeRunLog[]>(file, []);
   const next = all.filter((r) => r.profileId !== entry.profileId);
@@ -69,13 +73,4 @@ export async function recordChargeRun(entry: ChargeRunLog, file = CHARGE_RUNS_FI
 
 export async function listChargeRuns(file = CHARGE_RUNS_FILE): Promise<ChargeRunLog[]> {
   return readJson<ChargeRunLog[]>(file, []);
-}
-
-/** Grava a última rodada de FECHAMENTO (global — não é por perfil), substituindo a anterior. */
-export async function recordCloseRun(entry: CloseRunLog, file = CLOSE_RUN_FILE): Promise<void> {
-  await writeJson(file, entry);
-}
-
-export async function getLastCloseRun(file = CLOSE_RUN_FILE): Promise<CloseRunLog | undefined> {
-  return readJson<CloseRunLog | undefined>(file, undefined);
 }

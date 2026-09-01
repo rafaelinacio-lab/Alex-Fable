@@ -220,22 +220,23 @@ aproximação em dias úteis cheios.
 
 ## Aba "Cobranças" e fechamento automático (opcional)
 
-Toda cobrança enviada (ver acima) fica rastreada (`src/store/followUpCharges.ts`) e
-aparece na aba **"Cobranças"** do painel: chamado, equipe/perfil, quando foi cobrado, e —
-quando o fechamento automático está ligado — uma contagem regressiva até o fechamento.
+Cobrar e fechar são decididos na **MESMA passada** por chamado (`evaluateTicket` em
+`src/agent/followUp.ts`) — não é um sistema separado que roda depois: cada chamado
+examinado é avaliado uma vez e o resultado é cobrar, fechar, ou não fazer nada.
 
-Opcionalmente, um chamado já cobrado que continua sem retorno do cliente pode ser
+Opcionalmente, um chamado cujo **owner** está em silêncio há tempo demais pode ser
 **fechado sozinho** (`status: "Resolvido"`), com uma ação pública explicando o motivo,
-publicada pela mesma identidade que cobrou. Regra (`src/agent/followUpClose.ts`), por
-chamado já cobrado:
+publicada pela mesma identidade que cobra. Regra (confirmada com o usuário, 2026-09-01):
 
-1. o chamado ainda está "parado" (`baseStatus: "Stopped"`) — se alguém mudou o status
-   manualmente por fora, o rastreamento vira "resolvido externamente" e nunca é tocado;
-2. a última ação ainda é da automação ou do próprio owner (ninguém — nem o cliente —
-   respondeu desde a cobrança); se outra pessoa agiu, vira "cliente respondeu" e nunca
-   fecha por aqui;
-3. o tempo decorrido **desde a cobrança** (não desde o silêncio original), no mesmo
-   `thresholdBusinessHours` do perfil, já venceu.
+1. escopo, status/justification e "última ação real foi do owner" — mesmas três
+   primeiras condições da cobrança (ver acima; "real" já exclui as próprias ações da
+   automação, então uma cobrança anterior não é tratada como resposta de ninguém);
+2. o tempo decorrido desde essa última ação real do owner (não desde uma cobrança
+   anterior — o fechamento **não depende** de o chamado já ter sido cobrado) já passou
+   de `autoCloseThresholdBusinessDays` (regra de SLA do perfil — padrão 3 dias úteis).
+
+Fechar tem prioridade sobre cobrar: se o prazo de fechamento (mais longo) já venceu, o
+chamado é fechado direto, sem mandar cobrança antes.
 
 É uma automação **mais sensível** que só publicar uma mensagem (fechar não dá pra
 desfazer com uma nova mensagem), por isso tem gate **duplo e independente** do de cobrar:
@@ -245,9 +246,13 @@ desfazer com uma nova mensagem), por isso tem gate **duplo e independente** do d
 - `autoCloseEnabled` por perfil (painel, switch dedicado — pede confirmação explícita ao
   ligar, porque é uma mutação autônoma sem revisão humana).
 
-Os dois precisam estar ligados para aquele perfil fechar chamados sozinho. Desligado,
-os prazos na aba "Cobranças" continuam aparecendo — só que como informação, sem fechar
-nada.
+Os dois precisam estar ligados para aquele perfil fechar chamados sozinho.
+
+A aba **"Cobranças"** do painel tem duas partes: **"Última verificação"** (por perfil) —
+todo chamado examinado na rodada mais recente, cobrado/fechado/pulado com o motivo,
+horas úteis decorridas, e quanto falta para cobrar/fechar cada um (calculado do estado
+real do chamado, não de um valor congelado); e **"Histórico de cobranças enviadas"** —
+só quando cada chamado recebeu a mensagem de cobrança (`src/store/followUpCharges.ts`).
 
 ## Segurança e operação
 

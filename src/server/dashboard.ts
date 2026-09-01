@@ -29,11 +29,9 @@ import {
   type FollowUpProfileInput,
 } from "../config/followUpProfiles.js";
 import { runFollowUpCheck } from "../agent/followUp.js";
-import { runAutoCloseCheck } from "../agent/followUpClose.js";
 import { isFollowUpAutomationEnabled, isFollowUpAutoCloseEnabled } from "../config/followUp.js";
 import { listCharges } from "../store/followUpCharges.js";
-import { listChargeRuns, getLastCloseRun } from "../store/followUpRunLog.js";
-import { addBusinessMinutes } from "../movidesk/businessHours.js";
+import { listChargeRuns } from "../store/followUpRunLog.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DASHBOARD_HTML_PATH = path.join(__dirname, "..", "..", "public", "dashboard.html");
@@ -168,31 +166,14 @@ export function startDashboardServer(
     }
 
     if (parts[2] === "charges") {
-      if (parts[3] === "run-close" && method === "POST") {
-        const result = await runAutoCloseCheck();
-        if (result.checkedCount > 0) {
-          announceSystemMessage(
-            `[Fechamento automático] Verificação manual concluída pelo painel. ` +
-              `Chamados cobrados verificados: ${result.checkedCount}. Fechados: ${result.closed.length}.`,
-          );
-        }
-        json(200, result);
-        return;
-      }
       if (!parts[3] && method === "GET") {
+        // Fechar e cobrar acontecem na MESMA passada por chamado (evaluateTicket, ver
+        // src/agent/followUp.ts) — não há mais um prazo separado "desde a cobrança" pra
+        // calcular aqui; a lista abaixo é só histórico de QUANDO cada cobrança foi
+        // enviada. "Quanto falta pra fechar" fica na "Última verificação"
+        // (/api/followup/last-runs), calculado a partir do estado real do chamado.
         const charges = await listCharges();
-        const withDeadline = charges.map((c) => ({
-          ...c,
-          // Informativo mesmo quando o fechamento automático está desligado (mostra "seria
-          // fechado em..." mas o painel deve deixar claro que isso não vai acontecer sozinho).
-          deadlineAt:
-            c.status === "pending"
-              ? addBusinessMinutes(new Date(c.chargedAt), c.thresholdBusinessHours * 60, {
-                  schedule: c.schedule,
-                }).toISOString()
-              : undefined,
-        }));
-        json(200, { charges: withDeadline, autoCloseEnabled: isFollowUpAutoCloseEnabled() });
+        json(200, { charges, autoCloseEnabled: isFollowUpAutoCloseEnabled() });
         return;
       }
       json(404, { error: "rota não encontrada" });
@@ -200,8 +181,8 @@ export function startDashboardServer(
     }
 
     if (parts[2] === "last-runs" && method === "GET") {
-      const [chargeRuns, closeRun] = await Promise.all([listChargeRuns(), getLastCloseRun()]);
-      json(200, { chargeRuns, closeRun: closeRun ?? null });
+      const chargeRuns = await listChargeRuns();
+      json(200, { chargeRuns });
       return;
     }
 

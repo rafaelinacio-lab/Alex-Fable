@@ -19,7 +19,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { businessMinutesElapsed, businessDaysToMinutes, addBusinessMinutes, BUSINESS_MINUTES_PER_DAY, SLA_SCHEDULE } from "../src/movidesk/businessHours.js";
 import { evaluateTicket, runFollowUpCheck } from "../src/agent/followUp.js";
-import { decideAutoClose } from "../src/agent/followUpClose.js";
 import {
   listFollowUpProfiles,
   createFollowUpProfile,
@@ -791,40 +790,45 @@ test("evaluateTicket com waitingJustifications: distingue por 'justification' qu
   assert.equal(evaluateTicket(ticket, perfilSemJustification, now).action, "charged");
 });
 
-test("decideAutoClose: só fecha quando ninguém respondeu à cobrança E o mesmo prazo (agora contado da cobrança) venceu", () => {
-  const now = new Date("2026-09-04T15:00:00Z"); // sexta-feira, 12:00 local
-  const record = {
-    chargedAt: "2026-09-01T15:00:00Z", // terça 12:00 local — ~3 dias úteis antes de `now`
+test("evaluateTicket fecha (should_close) quando o owner está em silêncio há mais que autoCloseThresholdBusinessDays — direto, sem depender de cobrança prévia", () => {
+  const now = new Date("2026-04-08T15:00:00Z"); // quarta-feira, 12:00 local
+  const base = {
+    id: 1,
+    subject: "Chamado parado há dias",
+    status: "Aguardando Retorno do Cliente",
+    ownerTeam: "VIASOFT - Sistemas Internos",
+    owner: { id: "007-owner" },
+    // Última ação real do owner ~5 dias úteis (~43,75h úteis) antes de `now` — mesmo
+    // ticket "vencido" do primeiro teste de evaluateTicket, elapsed já confirmado ali.
+    actions: [{ createdDate: "2026-04-01T15:00:00Z", createdBy: { id: "007-owner" } }],
+    statusHistories: [{ status: "Aguardando Retorno do Cliente", changedDate: "2026-04-01T15:00:00Z" }],
+  };
+  const profileBase = {
+    scopeType: "team" as const,
+    ownerTeam: "VIASOFT - Sistemas Internos",
     thresholdBusinessHours: 24,
     schedule: SLA_SCHEDULE,
     reminderSenderId: "007",
-    ownerId: "007-owner",
   };
-  const profileOn = { autoCloseEnabled: true };
 
-  // Gate do PERFIL desligado -> nunca fecha, mesmo com tudo mais vencido.
-  assert.equal(decideAutoClose({ baseStatus: "Stopped", actions: [] }, record, { autoCloseEnabled: false }, now), "disabled");
+  // autoCloseEnabled desligado -> nunca fecha por este motivo, cai no fluxo normal de
+  // cobrança (43,75h > 24h de prazo de cobrança -> charged).
+  assert.equal(
+    evaluateTicket(base, { ...profileBase, autoCloseEnabled: false, autoCloseThresholdBusinessDays: 3 }, now).action,
+    "charged",
+  );
 
-  // Alguém mudou o status manualmente (não está mais "Stopped") -> resolvido por fora, nunca fecha.
-  assert.equal(decideAutoClose({ baseStatus: "Resolved", actions: [] }, record, profileOn, now), "resolved_externally");
+  // autoCloseEnabled ligado, mas prazo de fechamento ainda não venceu (6 dias úteis =
+  // 52,5h > 43,75h decorridas) -> ainda não fecha, mas já cobra (43,75h > 24h).
+  assert.equal(
+    evaluateTicket(base, { ...profileBase, autoCloseEnabled: true, autoCloseThresholdBusinessDays: 6 }, now).action,
+    "charged",
+  );
 
-  // Última ação é do CLIENTE (nem reminderSenderId nem ownerId) -> cliente respondeu, nunca fecha.
-  const respondeu = { baseStatus: "Stopped", actions: [{ createdDate: "2026-09-02T10:00:00Z", createdBy: { id: "cliente-123" } }] };
-  assert.equal(decideAutoClose(respondeu, record, profileOn, now), "responded");
-
-  // Última ação ainda é da automação (reminderSenderId), mas ainda dentro das 24h úteis
-  // desde a cobrança -> ainda não fecha.
-  const cobradoOntem = {
-    baseStatus: "Stopped",
-    actions: [{ createdDate: "2026-09-03T15:00:00Z", createdBy: { id: "007" } }], // quinta 12:00 local
-  };
-  assert.equal(decideAutoClose(cobradoOntem, { ...record, chargedAt: "2026-09-03T15:00:00Z" }, profileOn, now), "within_threshold");
-
-  // Última ação é do OWNER (respondeu de novo, mas o cliente continua em silêncio) e já
-  // passou das 24h úteis desde a cobrança original -> fecha.
-  const semRespostaDoCliente = {
-    baseStatus: "Stopped",
-    actions: [{ createdDate: "2026-09-02T10:00:00Z", createdBy: { id: "007-owner" } }],
-  };
-  assert.equal(decideAutoClose(semRespostaDoCliente, record, profileOn, now), "should_close");
+  // autoCloseEnabled ligado E prazo de fechamento (3 dias úteis = 26,25h) já venceu
+  // (43,75h decorridas) -> fecha DIRETO, mesmo esse chamado nunca tendo sido cobrado
+  // antes (regra confirmada com o usuário, 2026-09-01: não depende de cobrança prévia).
+  const resultado = evaluateTicket(base, { ...profileBase, autoCloseEnabled: true, autoCloseThresholdBusinessDays: 3 }, now);
+  assert.equal(resultado.action, "should_close");
+  assert.ok(resultado.elapsedBusinessHours > 26.25);
 });

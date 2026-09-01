@@ -9,6 +9,5 @@ data/local/ad_users.json
 data/local/followup_profiles.json
 data/local/followup_charges.json
 data/local/followup_last_charge_runs.json
-data/local/followup_last_close_run.json
 *.log
 exports/

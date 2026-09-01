@@ -1,14 +1,16 @@
 /**
- * Motor da automação de cobrança de chamados aguardando retorno/validação do cliente.
+ * Motor da automação de cobrança E fechamento de chamados aguardando retorno/validação
+ * do cliente.
  *
  * Roda por PERFIL (src/config/followUpProfiles.ts) — cada perfil é um ESCOPO (uma equipe
  * inteira, ou um owner/responsável específico — `scopeType`) com sua própria regra de
- * SLA (janela de expediente, prazo, status monitorados, remetente). Isso existe porque,
+ * SLA (janela de expediente, prazos, status monitorados, remetente). Isso existe porque,
  * além da equipe "Sistemas Internos" original, o usuário pediu para poder configurar
  * outras equipes (ou pessoas específicas) com SLAs diferentes pelo painel, sem mexer em
  * código.
  *
- * Regra (confirmada com o usuário), dentro de CADA perfil:
+ * Regra (confirmada com o usuário), dentro de CADA perfil, UMA ÚNICA passada por chamado
+ * decide entre cobrar, fechar ou não fazer nada:
  *  1. o chamado está dentro do escopo do perfil — `scopeType: "team"` restringe por
  *     `ownerTeam`, `scopeType: "owner"` por `owner.id` do chamado; ambos filtrados no
  *     servidor E de novo localmente (defesa em profundidade, mesmo padrão de only_open —
@@ -22,21 +24,26 @@
  *     nesses tenants (bug real já visto: perfil configurado com
  *     status:["Aguardando Retorno do Cliente", ...] sempre retornava zero, porque esse
  *     texto nunca existe como `status` — a distinção real estava no `justification`).
- *  3. a ÚLTIMA ação do chamado foi feita pelo OWNER (responsável) — se foi o cliente ou
- *     qualquer outra pessoa, o chamado não entra (o cliente já pode ter respondido e o
- *     status só não foi atualizado ainda).
- *  4. o tempo decorrido desde a referência (a mais recente entre a data da última ação
- *     do owner e a data em que o chamado entrou no status atual), contado em HORAS
- *     ÚTEIS pela janela de expediente DESTE perfil (não a de outro perfil, nem uma
- *     global fixa — src/movidesk/businessHours.ts), é >= ao limite configurado nele
- *     (`thresholdBusinessHours` — confirmado com o usuário: 24h úteis por padrão, não
- *     dias úteis aproximados).
+ *  3. a ÚLTIMA ação REAL do chamado foi feita pelo OWNER (responsável) — "real" exclui
+ *     ações do próprio `reminderSenderId` da automação (ex: Alex Fable): uma cobrança
+ *     anterior não conta como resposta de ninguém, senão o chamado ficaria marcado como
+ *     "cliente respondeu" para sempre depois da primeira cobrança. Se a última ação real
+ *     foi do cliente ou de qualquer outra pessoa, o chamado não entra.
+ *  4. o tempo decorrido desde a referência (a mais recente entre a data dessa última
+ *     ação real do owner e a data em que o chamado entrou no status/justification
+ *     atual), contado em HORAS ÚTEIS pela janela de expediente DESTE perfil (não a de
+ *     outro perfil, nem uma global fixa — src/movidesk/businessHours.ts), decide o quê:
+ *       - se `autoCloseEnabled` estiver ligado (perfil E gate global) e o tempo já
+ *         passou de `autoCloseThresholdBusinessDays` (regra de SLA confirmada com o
+ *         usuário, 2026-09-01: "3 dias úteis desde a última ação do owner", direto —
+ *         NÃO depende de o chamado já ter sido cobrado antes) -> FECHA (status
+ *         "Resolvido" + ação pública explicando). Fechar tem prioridade sobre cobrar.
+ *       - senão, se já passou de `thresholdBusinessHours` (24h úteis por padrão) -> COBRA
+ *         (ação pública pedindo retorno).
+ *       - senão, ainda dentro do prazo -> não faz nada.
  *
- * Cada chamado que bate as quatro condições recebe uma ação pública automática (ver
- * buildFollowUpMessage), criada pela identidade dedicada configurada NO PERFIL — nunca
- * pelo owner do chamado. Cada mutação é auditada (store/audit.ts) e emitida como evento
- * para o painel poder mostrar o resultado sem o usuário precisar perguntar (ver
- * src/observability/eventBus.ts).
+ * Cada mutação é auditada (store/audit.ts) e emitida como evento para o painel poder
+ * mostrar o resultado sem o usuário precisar perguntar (src/observability/eventBus.ts).
  */
 
 import {
@@ -46,11 +53,16 @@ import {
   type TicketActionSummary,
   type TicketStatusHistoryEntry,
 } from "../movidesk/tickets.js";
-import { businessMinutesElapsed } from "../movidesk/businessHours.js";
-import { buildFollowUpMessage, isFollowUpAutomationEnabled } from "../config/followUp.js";
+import { businessMinutesElapsed, businessDaysToMinutes } from "../movidesk/businessHours.js";
+import {
+  buildFollowUpMessage,
+  buildAutoCloseMessage,
+  isFollowUpAutomationEnabled,
+  isFollowUpAutoCloseEnabled,
+} from "../config/followUp.js";
 import { listFollowUpProfiles, markFollowUpProfileRan, type FollowUpProfile } from "../config/followUpProfiles.js";
 import { recordAuditEvent, hashPayload, newCorrelationId } from "../store/audit.js";
-import { recordCharge } from "../store/followUpCharges.js";
+import { recordCharge, updateChargeStatus } from "../store/followUpCharges.js";
 import { recordChargeRun } from "../store/followUpRunLog.js";
 import { emitEvent, newEventId } from "../observability/eventBus.js";
 import { MovideskApiError } from "../movidesk/client.js";
@@ -64,6 +76,8 @@ export interface FollowUpTicketResult {
   elapsedBusinessHours: number;
   action:
     | "charged"
+    | "should_close" // decisão pura de evaluateTicket — vira "closed"/"error" depois de closeTicket rodar
+    | "closed"
     | "skipped_owner_not_last"
     | "skipped_within_threshold"
     | "skipped_no_data"
@@ -81,6 +95,7 @@ export interface FollowUpRunResult {
   scopeLabel: string;
   checkedCount: number;
   charged: FollowUpTicketResult[];
+  closed: FollowUpTicketResult[];
   skipped: FollowUpTicketResult[];
   errors: FollowUpTicketResult[];
   ranAt: string;
@@ -116,6 +131,8 @@ export function evaluateTicket(
     | "ownerId"
     | "waitingJustifications"
     | "thresholdBusinessHours"
+    | "autoCloseEnabled"
+    | "autoCloseThresholdBusinessDays"
     | "schedule"
     | "reminderSenderId"
   >,
@@ -128,10 +145,7 @@ export function evaluateTicket(
   // lembrete, não uma resposta real de owner/cliente. Sem filtrar isso, depois da
   // primeira cobrança a última ação do ticket passa a ser sempre da automação, e o
   // ticket fica rotulado como "cliente respondeu" (skipped_owner_not_last) para sempre,
-  // mesmo que ninguém tenha respondido de verdade — o chamado já cobrado é acompanhado
-  // à parte pelo fechamento automático (followUpClose.ts, via o rastreamento de
-  // cobrança), mas ESTE motor precisa continuar enxergando corretamente quem foi a
-  // última pessoa real a agir.
+  // mesmo que ninguém tenha respondido de verdade.
   const realActions = (ticket.actions ?? []).filter((a) => a.createdBy?.id !== profile.reminderSenderId);
   const lastAction = latestByDate<TicketActionSummary>(realActions, "createdDate");
 
@@ -190,6 +204,17 @@ export function evaluateTicket(
 
   if (lastAction.createdBy.id !== ticket.owner.id) {
     return { ...base, elapsedBusinessHours, action: "skipped_owner_not_last" };
+  }
+
+  // Fechar tem PRIORIDADE sobre cobrar — se o prazo de fechamento (mais longo) já venceu,
+  // não faz sentido mandar uma cobrança antes. Independe de o chamado já ter sido cobrado
+  // alguma vez (regra confirmada com o usuário, 2026-09-01: conta direto da última ação
+  // real do owner, não de uma cobrança anterior).
+  if (profile.autoCloseEnabled) {
+    const closeThresholdMinutes = businessDaysToMinutes(profile.autoCloseThresholdBusinessDays, profile.schedule);
+    if (elapsedMinutes >= closeThresholdMinutes) {
+      return { ...base, elapsedBusinessHours, action: "should_close" };
+    }
   }
 
   if (elapsedMinutes < thresholdMinutes) {
@@ -259,6 +284,68 @@ async function chargeTicket(
       authenticatedUser: SYSTEM_ACTOR,
       intent: "cobrança automática de retorno do cliente",
       operation: "followUp.chargeTicket",
+      endpoint: "PATCH /tickets",
+      targetId: result.id,
+      payloadHash: hashPayload(payload),
+      correlationId: newCorrelationId(),
+      errorCode,
+    });
+    return { ...result, action: "error", errorMessage: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Fecha (status "Resolvido") um chamado cujo owner está em silêncio há mais tempo que
+ * `autoCloseThresholdBusinessDays` — decidido por `evaluateTicket` (action "should_close").
+ * Mesma identidade dedicada do perfil que cobra (nunca o owner individual).
+ */
+async function closeTicket(
+  result: FollowUpTicketResult,
+  profile: Pick<FollowUpProfile, "reminderSenderId">,
+): Promise<FollowUpTicketResult> {
+  const payload = {
+    status: "Resolvido",
+    justification: null,
+    actions: [
+      {
+        type: 2, // pública — precisa chegar ao cliente
+        createdBy: { id: profile.reminderSenderId },
+        description: buildAutoCloseMessage(result.subject),
+      },
+    ],
+  };
+  try {
+    await patchTicket(result.id, payload);
+    await recordAuditEvent({
+      timestamp: new Date().toISOString(),
+      authenticatedUser: SYSTEM_ACTOR,
+      intent: "fechamento automático por falta de retorno do owner (regra de SLA)",
+      operation: "followUp.closeTicket",
+      endpoint: "PATCH /tickets",
+      targetId: result.id,
+      payloadHash: hashPayload(payload),
+      correlationId: newCorrelationId(),
+      httpStatus: 200,
+      changedFields: ["status", "justification", "actions"],
+    });
+    // Se esse chamado tinha uma cobrança rastreada pendente (store/followUpCharges.ts),
+    // marca como encerrada — evita a aba "Cobranças" mostrar um chamado já fechado como
+    // se ainda estivesse esperando resposta. No-op silencioso se não havia rastreamento
+    // (chamado fechado direto, sem cobrança prévia — a regra não exige uma). Isolado do
+    // resultado real: mesma lição do bug de corpo vazio em client.ts.
+    try {
+      await updateChargeStatus(result.id, { status: "closed", resolvedAt: new Date().toISOString() });
+    } catch (trackErr) {
+      console.error(`followUp: falha ao atualizar rastreamento de cobrança do #${result.id} após fechamento:`, trackErr);
+    }
+    return { ...result, action: "closed" };
+  } catch (err) {
+    const errorCode = err instanceof MovideskApiError ? `movidesk:${err.status}:${err.propertyName ?? ""}` : "unknown";
+    await recordAuditEvent({
+      timestamp: new Date().toISOString(),
+      authenticatedUser: SYSTEM_ACTOR,
+      intent: "fechamento automático por falta de retorno do owner (regra de SLA)",
+      operation: "followUp.closeTicket",
       endpoint: "PATCH /tickets",
       targetId: result.id,
       payloadHash: hashPayload(payload),
@@ -381,12 +468,22 @@ export async function runFollowUpCheck(profile: FollowUpProfile): Promise<Follow
   const diagnostics = allTickets.length === 0 ? await diagnoseEmptyResult(profile) : undefined;
 
   const charged: FollowUpTicketResult[] = [];
+  const closed: FollowUpTicketResult[] = [];
   const skipped: FollowUpTicketResult[] = [];
   const errors: FollowUpTicketResult[] = [];
 
+  // O gate global de fechamento (env) só é lido AQUI (não dentro de evaluateTicket, que é
+  // uma função pura sem I/O nem leitura de env — mesmo princípio do gate de cobrança em
+  // isFollowUpAutomationEnabled). Combinado com o `autoCloseEnabled` do próprio perfil:
+  // os dois precisam estar ligados para o perfil fechar chamados sozinho.
+  const evalProfile = { ...profile, autoCloseEnabled: profile.autoCloseEnabled && isFollowUpAutoCloseEnabled() };
+
   for (const ticket of allTickets) {
-    const evaluation = evaluateTicket(ticket, profile, now);
-    if (evaluation.action === "charged") {
+    const evaluation = evaluateTicket(ticket, evalProfile, now);
+    if (evaluation.action === "should_close") {
+      const closeResult = await closeTicket(evaluation, profile);
+      (closeResult.action === "closed" ? closed : errors).push(closeResult);
+    } else if (evaluation.action === "charged") {
       const chargeResult = await chargeTicket(ticket, evaluation, profile);
       (chargeResult.action === "charged" ? charged : errors).push(chargeResult);
     } else {
@@ -402,6 +499,7 @@ export async function runFollowUpCheck(profile: FollowUpProfile): Promise<Follow
     scopeLabel,
     checkedCount: allTickets.length,
     charged,
+    closed,
     skipped,
     errors,
     ranAt: now.toISOString(),
@@ -421,7 +519,11 @@ export async function runFollowUpCheck(profile: FollowUpProfile): Promise<Follow
       scopeLabel,
       ranAt: runResult.ranAt,
       checkedCount: runResult.checkedCount,
-      tickets: [...charged, ...skipped, ...errors].map((t) => ({
+      thresholdBusinessHours: profile.thresholdBusinessHours,
+      autoCloseEnabled: evalProfile.autoCloseEnabled,
+      autoCloseThresholdHours:
+        businessDaysToMinutes(profile.autoCloseThresholdBusinessDays, profile.schedule) / 60,
+      tickets: [...charged, ...closed, ...skipped, ...errors].map((t) => ({
         id: t.id,
         subject: t.subject,
         status: t.status,
@@ -446,6 +548,7 @@ export async function runFollowUpCheck(profile: FollowUpProfile): Promise<Follow
       scope: scopeLabel,
       checkedCount: runResult.checkedCount,
       chargedIds: charged.map((c) => c.id),
+      closedIds: closed.map((c) => c.id),
       errorIds: errors.map((e) => e.id),
     },
   });

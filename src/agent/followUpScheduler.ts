@@ -1,5 +1,5 @@
 /**
- * Agendador da automação de cobrança (ver src/agent/followUp.ts, src/config/followUp.ts
+ * Agendador da automação de cobrança E fechamento (ver src/agent/followUp.ts, src/config/followUp.ts
  * e src/config/followUpProfiles.ts). Como agora existem VÁRIOS perfis (um por equipe),
  * cada um com seu próprio `checkIntervalHours`, o agendador não usa mais um único
  * `setInterval` do tamanho do intervalo — ele "bate" (tick) com frequência fixa e curta
@@ -16,10 +16,9 @@
  * projeto (cartões de arquivo, atividade em tempo real).
  */
 
-import { isFollowUpAutomationEnabled, isFollowUpAutoCloseEnabled } from "../config/followUp.js";
+import { isFollowUpAutomationEnabled } from "../config/followUp.js";
 import { listFollowUpProfiles, type FollowUpProfile } from "../config/followUpProfiles.js";
 import { runFollowUpCheck, describeScope, type FollowUpRunResult } from "./followUp.js";
-import { runAutoCloseCheck, type AutoCloseRunResult } from "./followUpClose.js";
 
 export interface FollowUpScheduler {
   stop(): void;
@@ -29,43 +28,29 @@ const TICK_MINUTES = Number(process.env.FOLLOWUP_TICK_MINUTES ?? 15);
 
 function summarize(result: FollowUpRunResult): string {
   const lines = [
-    `[${result.profileName} / ${result.scopeLabel}] Verificação automática de cobrança concluída.`,
+    `[${result.profileName} / ${result.scopeLabel}] Verificação automática de cobrança/fechamento concluída.`,
     `Chamados verificados: ${result.checkedCount}.`,
   ];
   if (result.charged.length > 0) {
     lines.push(
       `Cobrados agora (${result.charged.length}): ` + result.charged.map((c) => `#${c.id}`).join(", ") + ".",
     );
-  } else {
-    lines.push("Nenhum chamado precisou de cobrança nesta rodada.");
+  }
+  if (result.closed.length > 0) {
+    lines.push(`Fechados agora (${result.closed.length}): ` + result.closed.map((c) => `#${c.id}`).join(", ") + ".");
+  }
+  if (result.charged.length === 0 && result.closed.length === 0) {
+    lines.push("Nenhum chamado precisou de cobrança ou fechamento nesta rodada.");
   }
   if (result.errors.length > 0) {
     lines.push(
-      `⚠ Falha ao cobrar ${result.errors.length} chamado(s): ` +
+      `⚠ Falha em ${result.errors.length} chamado(s): ` +
         result.errors.map((e) => `#${e.id} (${e.errorMessage})`).join("; ") +
         ".",
     );
   }
   if (result.diagnostics?.length) {
     lines.push("🔎 " + result.diagnostics.join(" "));
-  }
-  return lines.join(" ");
-}
-
-function summarizeAutoClose(result: AutoCloseRunResult): string | undefined {
-  if (result.checkedCount === 0) return undefined; // gate desligado ou nada pendente — não polui a aba Conversa
-  const lines = [`[Fechamento automático] Chamados cobrados verificados: ${result.checkedCount}.`];
-  if (result.closed.length > 0) {
-    lines.push(`Fechados agora (${result.closed.length}): ` + result.closed.map((c) => `#${c.ticketId}`).join(", ") + ".");
-  } else {
-    lines.push("Nenhum precisou ser fechado nesta rodada.");
-  }
-  if (result.errors.length > 0) {
-    lines.push(
-      `⚠ Falha ao fechar ${result.errors.length} chamado(s): ` +
-        result.errors.map((e) => `#${e.ticketId} (${e.errorMessage})`).join("; ") +
-        ".",
-    );
   }
   return lines.join(" ");
 }
@@ -110,21 +95,9 @@ export function startFollowUpScheduler(announce: (text: string) => void): Follow
         announce(summarize(result));
       } catch (err) {
         announce(
-          `⚠ Verificação automática de cobrança falhou para "${profile.name}" (${describeScope(profile)}): ${err instanceof Error ? err.message : String(err)}`,
+          `⚠ Verificação automática de cobrança/fechamento falhou para "${profile.name}" (${describeScope(profile)}): ${err instanceof Error ? err.message : String(err)}`,
         );
       }
-    }
-
-    // Fechamento automático: roda TODA batida (não só quando um perfil vence seu próprio
-    // intervalo) — os prazos são por CHAMADO já cobrado, não por perfil. A função em si
-    // já tem seu próprio gate (global + por perfil) e devolve checkedCount 0 sem fazer
-    // nada quando desligada, então chamar sempre é seguro e barato.
-    try {
-      const closeResult = await runAutoCloseCheck();
-      const summary = summarizeAutoClose(closeResult);
-      if (summary) announce(summary);
-    } catch (err) {
-      announce(`⚠ Verificação de fechamento automático falhou: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

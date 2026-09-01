@@ -1,15 +1,13 @@
 /**
  * Rastreamento de chamados que já receberam a cobrança automática (ver src/agent/followUp.ts).
  *
- * Existe para dar suporte a DUAS necessidades que a auditoria (store/audit.ts) não cobre
- * sozinha, porque ela é um log append-only, não um estado consultável:
- *
- *  1. Painel — área "Cobranças" que lista os chamados cobrados e quanto tempo falta até
- *     o fechamento automático (pedido do usuário).
- *  2. O próprio fechamento automático (src/agent/followUpClose.ts) precisa saber QUANDO
- *     cada chamado foi cobrado para calcular o prazo — sem isso não haveria como saber
- *     se "já passaram 24h úteis desde a cobrança" sem reprocessar todo o histórico do
- *     chamado a cada checagem.
+ * Existe para o painel (aba "Cobranças") mostrar QUANDO cada chamado foi cobrado —
+ * histórico consultável, diferente da auditoria (store/audit.ts), que é um log
+ * append-only. Desde que cobrar e fechar passaram a ser decididos na MESMA passada por
+ * chamado (evaluateTicket, direto do estado real do ticket — não depende mais de saber
+ * "quando foi cobrado" para decidir fechar), este store deixou de ser necessário para a
+ * DECISÃO de fechamento; `status`/`resolvedAt` continuam atualizados (por closeTicket)
+ * só para o histórico não mostrar como "pendente" um chamado que já foi fechado.
  *
  * Implementação: arquivo JSON local, mesmo padrão de src/config/followUpProfiles.ts —
  * troque por um banco real em produção mantendo esta assinatura.
@@ -79,13 +77,10 @@ export async function listCharges(file = DEFAULT_FILE): Promise<ChargeRecord[]> 
   return readAll(file);
 }
 
-export async function listPendingCharges(file = DEFAULT_FILE): Promise<ChargeRecord[]> {
-  return (await readAll(file)).filter((r) => r.status === "pending");
-}
-
-/** Atualiza o desfecho de uma cobrança pendente (chamada pelo motor de fechamento
- * automático — src/agent/followUpClose.ts). No-op silencioso se o registro não existir
- * mais (ex: apagado manualmente) — nunca deve travar a checagem por isso. */
+/** Atualiza o desfecho de uma cobrança rastreada (chamada por closeTicket em
+ * src/agent/followUp.ts quando um chamado já cobrado é fechado). No-op silencioso se o
+ * registro não existir mais (ex: nunca foi cobrado antes, ou foi apagado manualmente) —
+ * nunca deve travar o fechamento por isso. */
 export async function updateChargeStatus(
   ticketId: number,
   patch: Pick<ChargeRecord, "status"> & Partial<Pick<ChargeRecord, "resolvedAt" | "closeError">>,

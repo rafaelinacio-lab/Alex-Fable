@@ -66,13 +66,19 @@ export interface FollowUpProfile {
    * exatos como 24 (confirmado com o usuário) em vez de uma aproximação em dias úteis
    * cheios (24h úteis não é um número redondo de dias úteis num expediente de 8h45). */
   thresholdBusinessHours: number;
-  /** Fechar sozinho (status "Resolvido") um chamado já cobrado, se ninguém responder
-   * dentro do MESMO `thresholdBusinessHours` (contado a partir da cobrança, não do
-   * silêncio original). Padrão false — é uma mutação mais sensível que só cobrar (não dá
-   * pra desfazer com uma mensagem), então exige opt-in explícito por perfil, ALÉM do gate
-   * global `FOLLOWUP_AUTOCLOSE_ENABLED` (ver src/config/followUp.ts). Ver
-   * src/agent/followUpClose.ts. */
+  /** Fechar sozinho (status "Resolvido") um chamado, se o OWNER estiver em silêncio há
+   * mais de `autoCloseThresholdBusinessDays` (regra confirmada com o usuário, 2026-09-01:
+   * "3 dias úteis, de acordo com a regra de SLA" — contado DIRETO da última ação real do
+   * owner até o momento da verificação, independente de já ter sido cobrado antes ou não;
+   * numa mesma passada por chamado, fechar tem prioridade sobre cobrar — ver
+   * evaluateTicket em src/agent/followUp.ts). Padrão false — é uma mutação mais sensível
+   * que só cobrar (não dá pra desfazer com uma mensagem), então exige opt-in explícito
+   * por perfil, ALÉM do gate global `FOLLOWUP_AUTOCLOSE_ENABLED` (ver
+   * src/config/followUp.ts). */
   autoCloseEnabled: boolean;
+  /** Em DIAS úteis (não horas, diferente de thresholdBusinessHours) — mesma unidade usada
+   * na regra de SLA original do usuário ("3 dias úteis"). */
+  autoCloseThresholdBusinessDays: number;
   checkIntervalHours: number;
   reminderSenderId: string;
   reminderSenderName: string;
@@ -96,6 +102,7 @@ export type FollowUpProfileInput = Pick<
   | "waitingJustifications"
   | "thresholdBusinessHours"
   | "autoCloseEnabled"
+  | "autoCloseThresholdBusinessDays"
   | "checkIntervalHours"
   | "reminderSenderId"
   | "reminderSenderName"
@@ -138,6 +145,8 @@ function seedProfile(): FollowUpProfile {
     // Seguro por padrão — fechar sozinho é opt-in explícito (painel + gate global), nunca
     // ligado automaticamente só por existir o perfil.
     autoCloseEnabled: false,
+    // 3 dias úteis: regra de SLA confirmada com o usuário (2026-09-01).
+    autoCloseThresholdBusinessDays: Number(process.env.FOLLOWUP_AUTOCLOSE_THRESHOLD_BUSINESS_DAYS ?? 3),
     checkIntervalHours: Number(process.env.FOLLOWUP_CHECK_INTERVAL_HOURS ?? 24),
     reminderSenderId: process.env.FOLLOWUP_SENDER_COD_REF ?? "007",
     reminderSenderName: "Alex Fable",
@@ -187,6 +196,7 @@ function validateInput(input: FollowUpProfileInput): void {
   }
   if (!input.waitingStatuses.length) throw new Error("Informe ao menos um status monitorado.");
   if (input.thresholdBusinessHours <= 0) throw new Error("thresholdBusinessHours deve ser positivo.");
+  if (input.autoCloseThresholdBusinessDays <= 0) throw new Error("autoCloseThresholdBusinessDays deve ser positivo.");
   if (input.checkIntervalHours <= 0) throw new Error("checkIntervalHours deve ser positivo.");
   if (!input.reminderSenderId.trim()) throw new Error("reminderSenderId (cod_ref) não pode ser vazio.");
   const { morningStart, morningEnd, afternoonStart, afternoonEnd } = input.schedule;
