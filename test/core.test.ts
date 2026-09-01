@@ -470,9 +470,56 @@ test("evaluateTicket (cobrança automática): só cobra quando última ação é
   assert.equal(evaluateTicket(semOwner, profile, now).action, "skipped_no_data");
 
   // Equipe diferente de "VIASOFT - Sistemas Internos" -> nunca cobra, mesmo vencido e
-  // com a última ação do owner (escopo confirmado pelo usuário: só essa equipe).
+  // com a última ação do owner (escopo confirmado pelo usuário: só essa equipe). As
+  // horas úteis decorridas são calculadas mesmo quando o chamado é pulado por outro
+  // motivo (pedido do usuário: quer ver "há quanto tempo" mesmo nos que não foram
+  // cobrados) — não fica mais hardcoded em 0.
   const outraEquipe = { ...vencido, id: 5, ownerTeam: "VIASOFT - Suporte Oracle Cloud" };
-  assert.equal(evaluateTicket(outraEquipe, profile, now).action, "skipped_wrong_team");
+  const resultadoOutraEquipe = evaluateTicket(outraEquipe, profile, now);
+  assert.equal(resultadoOutraEquipe.action, "skipped_wrong_team");
+  assert.ok(resultadoOutraEquipe.elapsedBusinessHours > 0, "esperava horas úteis decorridas > 0 mesmo num chamado pulado");
+});
+
+test("evaluateTicket ignora as próprias ações do remetente da automação (reminderSenderId) ao decidir quem agiu por último", () => {
+  const now = new Date("2026-04-08T15:00:00Z"); // quarta-feira, 12:00 local
+  const profile = {
+    scopeType: "team" as const,
+    ownerTeam: "VIASOFT - Sistemas Internos",
+    thresholdBusinessHours: 24,
+    schedule: SLA_SCHEDULE,
+    reminderSenderId: "007", // cod_ref do "Alex Fable"
+  };
+  const base = {
+    id: 1,
+    subject: "Chamado já cobrado antes",
+    status: "Aguardando Retorno do Cliente",
+    ownerTeam: "VIASOFT - Sistemas Internos",
+    owner: { id: "007-owner" },
+    statusHistories: [{ status: "Aguardando Retorno do Cliente", changedDate: "2026-04-01T15:00:00Z" }],
+  };
+
+  // Owner agiu (vencido) e DEPOIS a própria automação mandou uma cobrança (reminderSenderId).
+  // Sem filtrar isso, a "última ação" seria da automação, não do owner -> nunca mais cobraria.
+  // Filtrando, a última ação REAL continua sendo do owner -> ainda pode ser reavaliado.
+  const jaCobradoPelaAutomacao = {
+    ...base,
+    actions: [
+      { createdDate: "2026-04-01T15:00:00Z", createdBy: { id: "007-owner" } },
+      { createdDate: "2026-04-02T09:00:00Z", createdBy: { id: "007" } }, // cobrança da própria automação
+    ],
+  };
+  const resultado = evaluateTicket(jaCobradoPelaAutomacao, profile, now);
+  assert.equal(resultado.action, "charged");
+  assert.ok(resultado.elapsedBusinessHours > 0);
+
+  // Se, depois da cobrança da automação, o CLIENTE (não a automação) respondeu de
+  // verdade -> aí sim conta como resposta e não cobra.
+  const clienteRespondeuDepoisDaCobranca = {
+    ...jaCobradoPelaAutomacao,
+    id: 2,
+    actions: [...jaCobradoPelaAutomacao.actions, { createdDate: "2026-04-02T10:00:00Z", createdBy: { id: "cliente-123" } }],
+  };
+  assert.equal(evaluateTicket(clienteRespondeuDepoisDaCobranca, profile, now).action, "skipped_owner_not_last");
 });
 
 test("evaluateTicket com escopo por owner: cobra só chamados daquele responsável específico, ignorando a equipe", () => {

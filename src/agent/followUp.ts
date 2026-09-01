@@ -111,44 +111,29 @@ export function evaluateTicket(
   ticket: TicketSummary,
   profile: Pick<
     FollowUpProfile,
-    "scopeType" | "ownerTeam" | "ownerId" | "waitingJustifications" | "thresholdBusinessHours" | "schedule"
+    | "scopeType"
+    | "ownerTeam"
+    | "ownerId"
+    | "waitingJustifications"
+    | "thresholdBusinessHours"
+    | "schedule"
+    | "reminderSenderId"
   >,
   now: Date = new Date(),
 ): FollowUpTicketResult {
   const base = { id: ticket.id, subject: ticket.subject, status: ticket.status };
 
-  // Filtro de escopo — SEGUNDA verificação além do $filter no servidor (tanto "team"
-  // quanto "owner" já filtram lá, ver runFollowUpCheck), defesa em profundidade: mesmo
-  // padrão já usado para "em aberto", nunca confiar só no OData para restringir o escopo
-  // de uma mutação automática.
-  if (profile.scopeType === "team") {
-    if (ticket.ownerTeam !== profile.ownerTeam) {
-      return { ...base, elapsedBusinessHours: 0, action: "skipped_wrong_team" };
-    }
-  } else {
-    if (ticket.owner?.id !== profile.ownerId) {
-      return { ...base, elapsedBusinessHours: 0, action: "skipped_wrong_owner" };
-    }
-  }
-
-  // Filtro por justification (opcional) — só local, nunca via $filter (ver nota no topo
-  // do arquivo e em followUpProfiles.ts sobre não montar "or" no OData).
-  if (profile.waitingJustifications?.length && !profile.waitingJustifications.includes(ticket.justification ?? "")) {
-    return { ...base, elapsedBusinessHours: 0, action: "skipped_wrong_justification" };
-  }
-
-  if (!ticket.owner?.id) {
-    return { ...base, elapsedBusinessHours: 0, action: "skipped_no_data" };
-  }
-
-  const lastAction = latestByDate<TicketActionSummary>(ticket.actions, "createdDate");
-  if (!lastAction?.createdDate || !lastAction.createdBy?.id) {
-    return { ...base, elapsedBusinessHours: 0, action: "skipped_no_data" };
-  }
-
-  if (lastAction.createdBy.id !== ticket.owner.id) {
-    return { ...base, elapsedBusinessHours: 0, action: "skipped_owner_not_last" };
-  }
+  // Ações do PRÓPRIO remetente da automação (reminderSenderId, ex: Alex Fable) não contam
+  // como "alguém respondeu" nem servem de referência de tempo — é o nosso próprio
+  // lembrete, não uma resposta real de owner/cliente. Sem filtrar isso, depois da
+  // primeira cobrança a última ação do ticket passa a ser sempre da automação, e o
+  // ticket fica rotulado como "cliente respondeu" (skipped_owner_not_last) para sempre,
+  // mesmo que ninguém tenha respondido de verdade — o chamado já cobrado é acompanhado
+  // à parte pelo fechamento automático (followUpClose.ts, via o rastreamento de
+  // cobrança), mas ESTE motor precisa continuar enxergando corretamente quem foi a
+  // última pessoa real a agir.
+  const realActions = (ticket.actions ?? []).filter((a) => a.createdBy?.id !== profile.reminderSenderId);
+  const lastAction = latestByDate<TicketActionSummary>(realActions, "createdDate");
 
   // Entre as entradas de statusHistories que batem o status (E o justification, quando
   // presente) ATUAIS do ticket, pega a mais recente — representa quando o chamado entrou
@@ -161,15 +146,51 @@ export function evaluateTicket(
   );
   const statusEntry = latestByDate<TicketStatusHistoryEntry>(matchingStatusEntries, "changedDate");
 
-  const actionDate = new Date(lastAction.createdDate);
+  const actionDate = lastAction?.createdDate ? new Date(lastAction.createdDate) : undefined;
   const statusDate = statusEntry?.changedDate ? new Date(statusEntry.changedDate) : undefined;
-  const reference = statusDate && statusDate > actionDate ? statusDate : actionDate;
+  const reference =
+    actionDate && statusDate ? (statusDate > actionDate ? statusDate : actionDate) : (actionDate ?? statusDate);
 
-  const elapsedMinutes = businessMinutesElapsed(reference, now, { schedule: profile.schedule });
+  // Calculado ANTES dos filtros de escopo/justification/owner (abaixo) — dá pra mostrar
+  // "há quanto tempo esse chamado está parado" mesmo quando ele acaba sendo pulado por
+  // outro motivo (equipe errada, justification não monitorada etc.), em vez de sempre 0h.
+  const elapsedMinutes = reference ? businessMinutesElapsed(reference, now, { schedule: profile.schedule }) : 0;
   // Horas úteis -> minutos é só *60 (não precisa da janela de expediente para essa
   // conversão — diferente de "dias úteis", que dependia do tamanho do expediente).
   const thresholdMinutes = profile.thresholdBusinessHours * 60;
   const elapsedBusinessHours = Math.round((elapsedMinutes / 60) * 10) / 10;
+
+  // Filtro de escopo — SEGUNDA verificação além do $filter no servidor (tanto "team"
+  // quanto "owner" já filtram lá, ver runFollowUpCheck), defesa em profundidade: mesmo
+  // padrão já usado para "em aberto", nunca confiar só no OData para restringir o escopo
+  // de uma mutação automática.
+  if (profile.scopeType === "team") {
+    if (ticket.ownerTeam !== profile.ownerTeam) {
+      return { ...base, elapsedBusinessHours, action: "skipped_wrong_team" };
+    }
+  } else {
+    if (ticket.owner?.id !== profile.ownerId) {
+      return { ...base, elapsedBusinessHours, action: "skipped_wrong_owner" };
+    }
+  }
+
+  // Filtro por justification (opcional) — só local, nunca via $filter (ver nota no topo
+  // do arquivo e em followUpProfiles.ts sobre não montar "or" no OData).
+  if (profile.waitingJustifications?.length && !profile.waitingJustifications.includes(ticket.justification ?? "")) {
+    return { ...base, elapsedBusinessHours, action: "skipped_wrong_justification" };
+  }
+
+  if (!ticket.owner?.id) {
+    return { ...base, elapsedBusinessHours, action: "skipped_no_data" };
+  }
+
+  if (!lastAction?.createdDate || !lastAction.createdBy?.id) {
+    return { ...base, elapsedBusinessHours, action: "skipped_no_data" };
+  }
+
+  if (lastAction.createdBy.id !== ticket.owner.id) {
+    return { ...base, elapsedBusinessHours, action: "skipped_owner_not_last" };
+  }
 
   if (elapsedMinutes < thresholdMinutes) {
     return { ...base, elapsedBusinessHours, action: "skipped_within_threshold" };
