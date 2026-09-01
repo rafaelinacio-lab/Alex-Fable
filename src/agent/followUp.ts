@@ -59,6 +59,7 @@ import {
   buildAutoCloseMessage,
   isFollowUpAutomationEnabled,
   isFollowUpAutoCloseEnabled,
+  FOLLOWUP_ACTION_MARKER,
 } from "../config/followUp.js";
 import { listFollowUpProfiles, markFollowUpProfileRan, type FollowUpProfile } from "../config/followUpProfiles.js";
 import { recordAuditEvent, hashPayload, newCorrelationId } from "../store/audit.js";
@@ -140,13 +141,24 @@ export function evaluateTicket(
 ): FollowUpTicketResult {
   const base = { id: ticket.id, subject: ticket.subject, status: ticket.status };
 
-  // Ações do PRÓPRIO remetente da automação (reminderSenderId, ex: Alex Fable) não contam
-  // como "alguém respondeu" nem servem de referência de tempo — é o nosso próprio
-  // lembrete, não uma resposta real de owner/cliente. Sem filtrar isso, depois da
-  // primeira cobrança a última ação do ticket passa a ser sempre da automação, e o
-  // ticket fica rotulado como "cliente respondeu" (skipped_owner_not_last) para sempre,
-  // mesmo que ninguém tenha respondido de verdade.
-  const realActions = (ticket.actions ?? []).filter((a) => a.createdBy?.id !== profile.reminderSenderId);
+  // Ações DESTA AUTOMAÇÃO (identificadas pelo marcador invisível, não só por quem
+  // assinou — ver FOLLOWUP_ACTION_MARKER em config/followUp.ts) não contam como "alguém
+  // respondeu" nem servem de referência de tempo — são o nosso próprio lembrete, não uma
+  // resposta real de owner/cliente. Sem filtrar isso, depois da primeira cobrança a
+  // última ação do ticket passa a ser sempre da automação, e o ticket fica rotulado como
+  // "cliente respondeu" (skipped_owner_not_last) para sempre, mesmo que ninguém tenha
+  // respondido de verdade.
+  //
+  // IMPORTANTE: filtrar por CONTEÚDO (marcador), não só por `createdBy.id ===
+  // reminderSenderId` — em alguns chamados o OWNER é o próprio "Alex Fable" (fila não
+  // atribuída a uma pessoa, confirmado ao vivo em #891587, 2026-09-01). Filtrar por id
+  // sozinho apagaria TODA ação do owner nesses casos (nunca sobraria "última ação real
+  // do owner"), e o chamado nunca seria cobrado/fechado. Filtrando só as ações que
+  // carregam o marcador, uma ação real do owner-bot continua contando, e só as
+  // cobranças/fechamentos que ESTA automação mandou são ignoradas — inclusive quando
+  // owner === reminderSenderId (senão a própria cobrança "resetaria" o prazo pra sempre,
+  // já que passaria a contar como "o owner acabou de agir").
+  const realActions = (ticket.actions ?? []).filter((a) => !(a.description ?? "").includes(FOLLOWUP_ACTION_MARKER));
   const lastAction = latestByDate<TicketActionSummary>(realActions, "createdDate");
 
   // Entre as entradas de statusHistories que batem o status (E o justification, quando

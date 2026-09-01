@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { businessMinutesElapsed, businessDaysToMinutes, addBusinessMinutes, BUSINESS_MINUTES_PER_DAY, SLA_SCHEDULE } from "../src/movidesk/businessHours.js";
 import { evaluateTicket, runFollowUpCheck } from "../src/agent/followUp.js";
+import { FOLLOWUP_ACTION_MARKER } from "../src/config/followUp.js";
 import {
   listFollowUpProfiles,
   createFollowUpProfile,
@@ -479,7 +480,7 @@ test("evaluateTicket (cobrança automática): só cobra quando última ação é
   assert.ok(resultadoOutraEquipe.elapsedBusinessHours > 0, "esperava horas úteis decorridas > 0 mesmo num chamado pulado");
 });
 
-test("evaluateTicket ignora as próprias ações do remetente da automação (reminderSenderId) ao decidir quem agiu por último", () => {
+test("evaluateTicket ignora as próprias ações desta automação (marcador, não só o id) ao decidir quem agiu por último", () => {
   const now = new Date("2026-04-08T15:00:00Z"); // quarta-feira, 12:00 local
   const profile = {
     scopeType: "team" as const,
@@ -497,14 +498,15 @@ test("evaluateTicket ignora as próprias ações do remetente da automação (re
     statusHistories: [{ status: "Aguardando Retorno do Cliente", changedDate: "2026-04-01T15:00:00Z" }],
   };
 
-  // Owner agiu (vencido) e DEPOIS a própria automação mandou uma cobrança (reminderSenderId).
-  // Sem filtrar isso, a "última ação" seria da automação, não do owner -> nunca mais cobraria.
-  // Filtrando, a última ação REAL continua sendo do owner -> ainda pode ser reavaliado.
+  // Owner agiu (vencido) e DEPOIS a própria automação mandou uma cobrança (marcador no
+  // description). Sem filtrar isso, a "última ação" seria da automação, não do owner ->
+  // nunca mais cobraria. Filtrando pelo marcador, a última ação REAL continua sendo do
+  // owner -> ainda pode ser reavaliado.
   const jaCobradoPelaAutomacao = {
     ...base,
     actions: [
       { createdDate: "2026-04-01T15:00:00Z", createdBy: { id: "007-owner" } },
-      { createdDate: "2026-04-02T09:00:00Z", createdBy: { id: "007" } }, // cobrança da própria automação
+      { createdDate: "2026-04-02T09:00:00Z", createdBy: { id: "007" }, description: "texto" + FOLLOWUP_ACTION_MARKER },
     ],
   };
   const resultado = evaluateTicket(jaCobradoPelaAutomacao, profile, now);
@@ -519,6 +521,35 @@ test("evaluateTicket ignora as próprias ações do remetente da automação (re
     actions: [...jaCobradoPelaAutomacao.actions, { createdDate: "2026-04-02T10:00:00Z", createdBy: { id: "cliente-123" } }],
   };
   assert.equal(evaluateTicket(clienteRespondeuDepoisDaCobranca, profile, now).action, "skipped_owner_not_last");
+
+  // Caso real (#891587, confirmado ao vivo 2026-09-01): o OWNER do chamado é o próprio
+  // "Alex Fable" (fila não atribuída a uma pessoa) — reminderSenderId === owner.id. Uma
+  // ação genuína de "007" SEM o marcador (não é uma cobrança desta automação) ainda
+  // conta como atividade real do owner -> ainda pode ser cobrado quando vencer.
+  const ownerEhOProprioBot = {
+    id: 3,
+    subject: "Fila não atribuída",
+    status: "Aguardando Retorno do Cliente",
+    ownerTeam: "VIASOFT - Sistemas Internos",
+    owner: { id: "007" }, // owner É o Alex Fable
+    statusHistories: [{ status: "Aguardando Retorno do Cliente", changedDate: "2026-04-01T15:00:00Z" }],
+    actions: [{ createdDate: "2026-04-01T15:00:00Z", createdBy: { id: "007" }, description: "triagem automática (sem marcador)" }],
+  };
+  assert.equal(evaluateTicket(ownerEhOProprioBot, profile, now).action, "charged");
+
+  // Mesmo caso, mas com uma cobrança desta automação (marcador) DEPOIS da ação real do
+  // owner-bot -> a cobrança é filtrada, a referência continua sendo a ação real anterior
+  // (não a data da cobrança) -> o chamado ainda vence e é cobrado de novo, sem a própria
+  // cobrança resetar o prazo pra sempre.
+  const ownerBotComCobrancaPropria = {
+    ...ownerEhOProprioBot,
+    id: 4,
+    actions: [
+      ...ownerEhOProprioBot.actions,
+      { createdDate: "2026-04-02T09:00:00Z", createdBy: { id: "007" }, description: "texto" + FOLLOWUP_ACTION_MARKER },
+    ],
+  };
+  assert.equal(evaluateTicket(ownerBotComCobrancaPropria, profile, now).action, "charged");
 });
 
 test("evaluateTicket com escopo por owner: cobra só chamados daquele responsável específico, ignorando a equipe", () => {
