@@ -32,6 +32,7 @@ import { runFollowUpCheck } from "../agent/followUp.js";
 import { runAutoCloseCheck } from "../agent/followUpClose.js";
 import { isFollowUpAutomationEnabled, isFollowUpAutoCloseEnabled } from "../config/followUp.js";
 import { listCharges } from "../store/followUpCharges.js";
+import { listChargeRuns, getLastCloseRun } from "../store/followUpRunLog.js";
 import { addBusinessMinutes } from "../movidesk/businessHours.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -195,6 +196,12 @@ export function startDashboardServer(
         return;
       }
       json(404, { error: "rota não encontrada" });
+      return;
+    }
+
+    if (parts[2] === "last-runs" && method === "GET") {
+      const [chargeRuns, closeRun] = await Promise.all([listChargeRuns(), getLastCloseRun()]);
+      json(200, { chargeRuns, closeRun: closeRun ?? null });
       return;
     }
 

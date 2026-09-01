@@ -32,6 +32,7 @@ import { businessMinutesElapsed } from "../movidesk/businessHours.js";
 import { isFollowUpAutoCloseEnabled, buildAutoCloseMessage } from "../config/followUp.js";
 import { listFollowUpProfiles, type FollowUpProfile } from "../config/followUpProfiles.js";
 import { listPendingCharges, updateChargeStatus, type ChargeRecord } from "../store/followUpCharges.js";
+import { recordCloseRun } from "../store/followUpRunLog.js";
 import { recordAuditEvent, hashPayload, newCorrelationId } from "../store/audit.js";
 import { emitEvent, newEventId } from "../observability/eventBus.js";
 import { MovideskApiError } from "../movidesk/client.js";
@@ -40,6 +41,7 @@ const SYSTEM_ACTOR = { id_local: "sistema-followup-autoclose", email: "automacao
 
 export interface AutoCloseTicketResult {
   ticketId: number;
+  subject: string;
   action: "closed" | "responded" | "resolved_externally" | "within_threshold" | "orphan_profile" | "disabled" | "error";
   errorMessage?: string;
 }
@@ -98,7 +100,7 @@ async function evaluateAndClose(
   now: Date,
 ): Promise<AutoCloseTicketResult> {
   if (!profile.autoCloseEnabled) {
-    return { ticketId: record.ticketId, action: "disabled" };
+    return { ticketId: record.ticketId, subject: record.subject, action: "disabled" };
   }
 
   let ticket: TicketSummary;
@@ -111,6 +113,7 @@ async function evaluateAndClose(
   } catch (err) {
     return {
       ticketId: record.ticketId,
+      subject: record.subject,
       action: "error",
       errorMessage: `Falha ao buscar chamado: ${err instanceof Error ? err.message : String(err)}`,
     };
@@ -120,14 +123,14 @@ async function evaluateAndClose(
 
   if (decision === "resolved_externally") {
     await updateChargeStatus(record.ticketId, { status: "resolved_externally", resolvedAt: now.toISOString() });
-    return { ticketId: record.ticketId, action: "resolved_externally" };
+    return { ticketId: record.ticketId, subject: record.subject, action: "resolved_externally" };
   }
   if (decision === "responded") {
     await updateChargeStatus(record.ticketId, { status: "responded", resolvedAt: now.toISOString() });
-    return { ticketId: record.ticketId, action: "responded" };
+    return { ticketId: record.ticketId, subject: record.subject, action: "responded" };
   }
   if (decision === "within_threshold") {
-    return { ticketId: record.ticketId, action: "within_threshold" };
+    return { ticketId: record.ticketId, subject: record.subject, action: "within_threshold" };
   }
 
   const payload = {
@@ -156,7 +159,7 @@ async function evaluateAndClose(
       changedFields: ["status", "justification", "actions"],
     });
     await updateChargeStatus(record.ticketId, { status: "closed", resolvedAt: now.toISOString() });
-    return { ticketId: record.ticketId, action: "closed" };
+    return { ticketId: record.ticketId, subject: record.subject, action: "closed" };
   } catch (err) {
     const errorCode = err instanceof MovideskApiError ? `movidesk:${err.status}:${err.propertyName ?? ""}` : "unknown";
     const errorMessage = err instanceof Error ? err.message : String(err);
@@ -172,7 +175,7 @@ async function evaluateAndClose(
       errorCode,
     });
     await updateChargeStatus(record.ticketId, { status: "closed_error", closeError: errorMessage });
-    return { ticketId: record.ticketId, action: "error", errorMessage };
+    return { ticketId: record.ticketId, subject: record.subject, action: "error", errorMessage };
   }
 }
 
@@ -198,13 +201,31 @@ export async function runAutoCloseCheck(): Promise<AutoCloseRunResult> {
   for (const record of pending) {
     const profile = profilesById.get(record.profileId);
     if (!profile) {
-      skipped.push({ ticketId: record.ticketId, action: "orphan_profile" });
+      skipped.push({ ticketId: record.ticketId, subject: record.subject, action: "orphan_profile" });
       continue;
     }
     const result = await evaluateAndClose(record, profile, now);
     if (result.action === "closed") closed.push(result);
     else if (result.action === "error") errors.push(result);
     else skipped.push(result);
+  }
+
+  // "Última verificação" para o painel — mesmo princípio de recordChargeRun em
+  // followUp.ts: mostra TODO chamado cobrado que foi examinado nesta rodada, não só os
+  // fechados (isolado do resultado real: uma falha aqui não deve mascarar nada).
+  try {
+    await recordCloseRun({
+      ranAt: now.toISOString(),
+      checkedCount: pending.length,
+      tickets: [...closed, ...skipped, ...errors].map((t) => ({
+        id: t.ticketId,
+        subject: t.subject,
+        action: t.action,
+        errorMessage: t.errorMessage,
+      })),
+    });
+  } catch (err) {
+    console.error("followUpClose: falha ao registrar log da última verificação (não afeta a rodada em si):", err);
   }
 
   emitEvent({

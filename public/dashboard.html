@@ -338,6 +338,16 @@
   .charge-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; font-size: 12px; color: var(--muted); }
   .charge-meta b { color: var(--text); font-weight: 600; }
   .charge-countdown { font-variant-numeric: tabular-nums; }
+  .run-section { margin-top: 22px; }
+  .run-section h3 { font-size: 13px; margin: 0 0 4px; }
+  .run-section .sub { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .run-table-wrap { overflow-x: auto; border: 1px solid var(--panel-border); border-radius: 10px; }
+  table.run-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.run-table th, table.run-table td { padding: 8px 12px; text-align: left; white-space: nowrap; }
+  table.run-table th { color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--panel-border); }
+  table.run-table td { border-bottom: 1px solid var(--panel-border); }
+  table.run-table tr:last-child td { border-bottom: none; }
+  table.run-table td.subject { white-space: normal; max-width: 360px; }
   .form-error { color: var(--err); font-size: 12px; margin-top: 8px; }
 </style>
 </head>
@@ -405,6 +415,18 @@
     <button class="btn" id="refreshChargesBtn">Atualizar</button>
   </div>
   <div id="chargesList"></div>
+
+  <div class="run-section">
+    <h3>Última verificação de cobrança (por perfil)</h3>
+    <div class="sub">Todo chamado examinado na última rodada de cada perfil — inclusive os que NÃO foram cobrados, com o motivo.</div>
+    <div id="chargeRunsWrap"></div>
+  </div>
+
+  <div class="run-section">
+    <h3>Última verificação de fechamento</h3>
+    <div class="sub">Todo chamado já cobrado que foi examinado na última rodada de fechamento — inclusive os que NÃO foram encerrados, com o motivo.</div>
+    <div id="closeRunWrap"></div>
+  </div>
 </div>
 
 <script>
@@ -1003,8 +1025,74 @@
   const chargesList = document.getElementById("chargesList");
   const autoCloseGateBanner = document.getElementById("autoCloseGateBanner");
   const refreshChargesBtn = document.getElementById("refreshChargesBtn");
+  const chargeRunsWrap = document.getElementById("chargeRunsWrap");
+  const closeRunWrap = document.getElementById("closeRunWrap");
   let latestCharges = [];
   let chargesCountdownTimer = null;
+
+  const CHARGE_ACTION_LABEL = {
+    charged: "Cobrado agora",
+    skipped_owner_not_last: "Cliente (ou outra pessoa) respondeu por último",
+    skipped_within_threshold: "Ainda dentro do prazo",
+    skipped_no_data: "Sem dado suficiente (sem owner/ação)",
+    skipped_wrong_team: "Fora do escopo (equipe)",
+    skipped_wrong_owner: "Fora do escopo (owner)",
+    skipped_wrong_justification: "Justificativa não monitorada",
+    error: "Erro ao cobrar",
+  };
+  const CLOSE_ACTION_LABEL = {
+    closed: "Encerrado agora",
+    responded: "Cliente respondeu — não fecha",
+    resolved_externally: "Resolvido manualmente — não fecha",
+    within_threshold: "Ainda dentro do prazo",
+    orphan_profile: "Perfil da cobrança foi excluído",
+    disabled: "Fechamento desligado nesse perfil",
+    error: "Erro ao fechar",
+  };
+
+  function runTable(tickets, actionLabels) {
+    if (!tickets.length) return '<div class="empty">Nenhum chamado nesta rodada.</div>';
+    const rows = tickets
+      .map(
+        (t) =>
+          "<tr><td>#" + t.id + "</td><td class=\"subject\">" + escapeHtml(t.subject || "") + "</td><td>" +
+          escapeHtml(actionLabels[t.action] || t.action) + "</td><td>" +
+          (typeof t.elapsedBusinessHours === "number" ? t.elapsedBusinessHours + "h" : "—") + "</td>" +
+          (t.errorMessage ? '<td style="color:var(--err)">' + escapeHtml(t.errorMessage) + "</td>" : "<td>—</td>") +
+          "</tr>",
+      )
+      .join("");
+    return (
+      '<div class="run-table-wrap"><table class="run-table"><thead><tr>' +
+      "<th>Chamado</th><th>Assunto</th><th>Resultado</th><th>Horas úteis decorridas</th><th>Detalhe</th>" +
+      "</tr></thead><tbody>" + rows + "</tbody></table></div>"
+    );
+  }
+
+  function renderChargeRuns(runs) {
+    if (!runs.length) {
+      chargeRunsWrap.innerHTML = '<div class="empty">Nenhuma verificação de cobrança rodou ainda.</div>';
+      return;
+    }
+    chargeRunsWrap.innerHTML = runs
+      .map(
+        (r) =>
+          '<div class="charge-sub" style="margin:14px 0 6px;">' + escapeHtml(r.profileName) + " · " + escapeHtml(r.scopeLabel) +
+          " — verificado em " + new Date(r.ranAt).toLocaleString("pt-BR") + " (" + r.checkedCount + " chamado(s))</div>" +
+          runTable(r.tickets, CHARGE_ACTION_LABEL),
+      )
+      .join("");
+  }
+
+  function renderCloseRun(run) {
+    if (!run) {
+      closeRunWrap.innerHTML = '<div class="empty">Nenhuma verificação de fechamento rodou ainda.</div>';
+      return;
+    }
+    closeRunWrap.innerHTML =
+      '<div class="charge-sub" style="margin-bottom:6px;">Verificado em ' + new Date(run.ranAt).toLocaleString("pt-BR") +
+      " (" + run.checkedCount + " chamado(s))</div>" + runTable(run.tickets, CLOSE_ACTION_LABEL);
+  }
 
   const CHARGE_STATUS_LABEL = {
     pending: "Aguardando resposta",
@@ -1027,16 +1115,27 @@
 
   async function loadCharges() {
     chargesList.innerHTML = '<div class="empty">Carregando…</div>';
+    chargeRunsWrap.innerHTML = '<div class="empty">Carregando…</div>';
+    closeRunWrap.innerHTML = '<div class="empty">Carregando…</div>';
     try {
-      const res = await fetch("/api/followup/charges");
-      const data = await res.json();
+      const [chargesRes, lastRunsRes] = await Promise.all([
+        fetch("/api/followup/charges"),
+        fetch("/api/followup/last-runs"),
+      ]);
+      const data = await chargesRes.json();
       renderAutoCloseGateBanner(data.autoCloseEnabled);
       latestCharges = data.charges || [];
       renderCharges();
       if (chargesCountdownTimer) clearInterval(chargesCountdownTimer);
       chargesCountdownTimer = setInterval(updateCountdowns, 1000);
+
+      const lastRuns = await lastRunsRes.json();
+      renderChargeRuns(lastRuns.chargeRuns || []);
+      renderCloseRun(lastRuns.closeRun);
     } catch (err) {
       chargesList.innerHTML = '<div class="empty">Falha ao carregar cobranças: ' + escapeHtml(String(err)) + "</div>";
+      chargeRunsWrap.innerHTML = "";
+      closeRunWrap.innerHTML = "";
     }
   }
 

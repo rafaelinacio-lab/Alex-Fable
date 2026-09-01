@@ -51,6 +51,7 @@ import { buildFollowUpMessage, isFollowUpAutomationEnabled } from "../config/fol
 import { listFollowUpProfiles, markFollowUpProfileRan, type FollowUpProfile } from "../config/followUpProfiles.js";
 import { recordAuditEvent, hashPayload, newCorrelationId } from "../store/audit.js";
 import { recordCharge } from "../store/followUpCharges.js";
+import { recordChargeRun } from "../store/followUpRunLog.js";
 import { emitEvent, newEventId } from "../observability/eventBus.js";
 import { MovideskApiError } from "../movidesk/client.js";
 
@@ -387,6 +388,30 @@ export async function runFollowUpCheck(profile: FollowUpProfile): Promise<Follow
   };
 
   await markFollowUpProfileRan(profile.id, runResult.ranAt);
+
+  // "Última verificação" para o painel (aba Cobranças) — mostra TODO chamado examinado
+  // nesta rodada, não só os cobrados (skipped_within_threshold, skipped_wrong_justification
+  // etc. também aparecem, com o motivo). Isolado do resto: uma falha aqui não deve
+  // esconder o resultado real da rodada do usuário nem contar como erro da automação.
+  try {
+    await recordChargeRun({
+      profileId: profile.id,
+      profileName: profile.name,
+      scopeLabel,
+      ranAt: runResult.ranAt,
+      checkedCount: runResult.checkedCount,
+      tickets: [...charged, ...skipped, ...errors].map((t) => ({
+        id: t.id,
+        subject: t.subject,
+        status: t.status,
+        elapsedBusinessHours: t.elapsedBusinessHours,
+        action: t.action,
+        errorMessage: t.errorMessage,
+      })),
+    });
+  } catch (err) {
+    console.error("followUp: falha ao registrar log da última verificação (não afeta a rodada em si):", err);
+  }
 
   emitEvent({
     kind: "tool_call_end",
