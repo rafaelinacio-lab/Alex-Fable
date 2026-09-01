@@ -234,7 +234,7 @@ async function chargeTicket(
       {
         type: 2, // pública — precisa chegar ao cliente
         createdBy: { id: profile.reminderSenderId },
-        description: buildFollowUpMessage(result.subject),
+        description: buildFollowUpMessage(),
       },
     ],
   };
@@ -310,7 +310,7 @@ async function closeTicket(
       {
         type: 2, // pública — precisa chegar ao cliente
         createdBy: { id: profile.reminderSenderId },
-        description: buildAutoCloseMessage(result.subject),
+        description: buildAutoCloseMessage(),
       },
     ],
   };
