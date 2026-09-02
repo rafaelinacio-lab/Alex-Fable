@@ -349,6 +349,37 @@
     font-size: 13px !important; color: var(--text) !important; cursor: pointer;
   }
   .radio-inline input { width: auto; }
+
+  /* --- aba "Cobranças" --- */
+  #chargesView { padding: 4px 4px 24px; }
+  .charge-card {
+    background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 10px;
+  }
+  .charge-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .charge-title { font-weight: 600; font-size: 14px; }
+  .charge-sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .charge-badge {
+    font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px; white-space: nowrap;
+    border: 1px solid var(--panel-border); color: var(--muted);
+  }
+  .charge-badge.pending { border-color: var(--accent); color: var(--accent); }
+  .charge-badge.closed { border-color: var(--ok); color: var(--ok); }
+  .charge-badge.responded { border-color: var(--ok); color: var(--ok); }
+  .charge-badge.error, .charge-badge.closed_error { border-color: var(--err); color: var(--err); }
+  .charge-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .charge-meta b { color: var(--text); font-weight: 600; }
+  .charge-countdown { font-variant-numeric: tabular-nums; }
+  .run-section { margin-top: 22px; }
+  .run-section h3 { font-size: 13px; margin: 0 0 4px; }
+  .run-section .sub { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .run-table-wrap { overflow-x: auto; border: 1px solid var(--panel-border); border-radius: 10px; }
+  table.run-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  table.run-table th, table.run-table td { padding: 8px 12px; text-align: left; white-space: nowrap; }
+  table.run-table th { color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--panel-border); }
+  table.run-table td { border-bottom: 1px solid var(--panel-border); }
+  table.run-table tr:last-child td { border-bottom: none; }
+  table.run-table td.subject { white-space: normal; max-width: 360px; }
   .form-error { color: var(--err); font-size: 12px; margin-top: 8px; }
 </style>
 </head>
@@ -365,6 +396,7 @@
   <button data-tab="activity" class="active">Atividade</button>
   <button data-tab="chat">Conversa</button>
   <button data-tab="automation">Automação</button>
+  <button data-tab="charges">Cobranças</button>
 </div>
 
 <div id="activityView" class="view active">
@@ -404,6 +436,26 @@
   </div>
   <div id="profileFormWrap"></div>
   <div id="profilesList"></div>
+</div>
+
+<div id="chargesView" class="view">
+  <div id="autoCloseGateBanner" class="gate-banner"></div>
+
+  <div class="run-section" style="margin-top:0;">
+    <h3>Última verificação (por perfil)</h3>
+    <div class="sub">Todo chamado examinado na última rodada de cada perfil — cobrado, fechado, ou pulado (com o motivo) — com quanto falta para cobrar/fechar cada um.</div>
+    <div class="profiles-toolbar">
+      <span></span>
+      <button class="btn" id="refreshChargesBtn">Atualizar</button>
+    </div>
+    <div id="chargeRunsWrap"></div>
+  </div>
+
+  <div class="run-section">
+    <h3>Histórico de cobranças enviadas</h3>
+    <div class="sub">Quando cada chamado recebeu a mensagem de cobrança (não recalcula prazo — isso está na tabela acima, sempre a partir do estado real do chamado).</div>
+    <div id="chargesList"></div>
+  </div>
 </div>
 
 <script>
@@ -687,6 +739,8 @@
         chatLog.scrollTop = chatLog.scrollHeight;
       } else if (btn.dataset.tab === "automation") {
         loadFollowUpProfiles();
+      } else if (btn.dataset.tab === "charges") {
+        loadCharges();
       }
     });
   });
@@ -875,6 +929,8 @@
         '<div class="profile-actions">' +
         '<label class="switch" title="Habilitado"><input type="checkbox" ' + (p.enabled ? "checked" : "") +
         ' data-action="toggle" data-id="' + p.id + '"><span class="slider"></span></label>' +
+        '<label class="switch" title="Fechar automaticamente sem retorno"><input type="checkbox" ' + (p.autoCloseEnabled ? "checked" : "") +
+        ' data-action="toggle-autoclose" data-id="' + p.id + '"><span class="slider"></span></label>' +
         '<button class="btn" data-action="run" data-id="' + p.id + '">Rodar agora</button>' +
         '<button class="btn" data-action="edit" data-id="' + p.id + '">Editar</button>' +
         '<button class="btn danger" data-action="delete" data-id="' + p.id + '">Excluir</button>' +
@@ -884,7 +940,8 @@
         (p.waitingJustifications && p.waitingJustifications.length
           ? "<span>Justificativas: <b>" + escapeHtml(p.waitingJustifications.join(", ")) + "</b></span>"
           : "") +
-        "<span>Prazo: <b>" + p.thresholdBusinessDays + " dia(s) útil(eis)</b></span>" +
+        "<span>Prazo de cobrança: <b>" + p.thresholdBusinessHours + "h útil(eis)</b></span>" +
+        "<span>Fechamento automático: <b>" + (p.autoCloseEnabled ? "ligado (" + p.autoCloseThresholdBusinessDays + " dia(s) útil(eis))" : "desligado") + "</b></span>" +
         "<span>Expediente: <b>" + minutesToHHMM(p.schedule.morningStart) + "–" + minutesToHHMM(p.schedule.morningEnd) +
         " e " + minutesToHHMM(p.schedule.afternoonStart) + "–" + minutesToHHMM(p.schedule.afternoonEnd) + "</b></span>" +
         "<span>Verifica a cada <b>" + p.checkIntervalHours + "h</b></span>" +
@@ -900,7 +957,7 @@
     if (!btn) return;
     const id = btn.dataset.id;
     const action = btn.dataset.action;
-    if (action === "toggle") return; // tratado no listener "change" abaixo
+    if (action === "toggle" || action === "toggle-autoclose") return; // tratado no listener "change" abaixo
     if (action === "delete") {
       if (!confirm("Excluir este perfil? A equipe deixa de ser verificada.")) return;
       await fetch("/api/followup/profiles/" + id, { method: "DELETE" });
@@ -933,16 +990,28 @@
   });
 
   profilesList.addEventListener("change", async (e) => {
-    if (e.target.dataset.action !== "toggle") return;
+    const action = e.target.dataset.action;
+    if (action !== "toggle" && action !== "toggle-autoclose") return;
     const id = e.target.dataset.id;
+    if (action === "toggle-autoclose" && e.target.checked) {
+      if (!confirm(
+        "Isso permite que o agente ENCERRE chamados sozinho (status Resolvido), sem revisão humana, " +
+        "quando ninguém responder à cobrança dentro do prazo. Também exige FOLLOWUP_AUTOCLOSE_ENABLED=true " +
+        "no .env — sem isso, nada é fechado mesmo com este perfil marcado. Confirma?"
+      )) {
+        e.target.checked = false;
+        return;
+      }
+    }
     const res = await fetch("/api/followup/profiles");
     const data = await res.json();
     const profile = data.profiles.find((p) => p.id === id);
     if (!profile) return;
+    const patch = action === "toggle" ? { enabled: e.target.checked } : { autoCloseEnabled: e.target.checked };
     await fetch("/api/followup/profiles/" + id, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...profile, enabled: e.target.checked }),
+      body: JSON.stringify({ ...profile, ...patch }),
     });
     loadFollowUpProfiles();
   });
@@ -960,7 +1029,8 @@
       enabled: true,
       waitingStatuses: ["Aguardando Retorno do Cliente", "Aguardando Validação do Cliente"],
       waitingJustifications: [],
-      thresholdBusinessDays: 3,
+      thresholdBusinessHours: 24,
+      autoCloseThresholdBusinessDays: 3,
       checkIntervalHours: 24,
       reminderSenderId: "007",
       reminderSenderName: "Alex Fable",
@@ -982,7 +1052,8 @@
       '<label id="pf-ownername-wrap">Owner — nome (só exibição)<input id="pf-ownername" value="' + escapeAttr(v.ownerName || "") + '"></label>' +
       '<label>Status monitorados (separados por vírgula)<input id="pf-statuses" value="' + escapeAttr(v.waitingStatuses.join(", ")) + '"></label>' +
       '<label>Justificativas monitoradas (opcional, separadas por vírgula)<input id="pf-justifications" value="' + escapeAttr((v.waitingJustifications || []).join(", ")) + '"></label>' +
-      '<label>Prazo (dias úteis)<input id="pf-threshold" type="number" min="1" value="' + v.thresholdBusinessDays + '"></label>' +
+      '<label>Prazo de cobrança (horas úteis)<input id="pf-threshold" type="number" min="1" value="' + v.thresholdBusinessHours + '"></label>' +
+      '<label>Prazo de fechamento automático (dias úteis)<input id="pf-close-threshold" type="number" min="1" value="' + v.autoCloseThresholdBusinessDays + '"></label>' +
       '<label>Verificar a cada (horas)<input id="pf-interval" type="number" min="1" value="' + v.checkIntervalHours + '"></label>' +
       '<label>Remetente — cod_ref<input id="pf-senderid" value="' + escapeAttr(v.reminderSenderId) + '"></label>' +
       '<label>Remetente — nome<input id="pf-sendername" value="' + escapeAttr(v.reminderSenderName) + '"></label>' +
@@ -1021,9 +1092,11 @@
         ownerId: scopeType === "owner" ? wrap.querySelector("#pf-ownerid").value.trim() : undefined,
         ownerName: scopeType === "owner" ? wrap.querySelector("#pf-ownername").value.trim() : undefined,
         enabled: v.enabled,
+        autoCloseEnabled: !!v.autoCloseEnabled, // criação sempre começa desligado; ligar é só pelo switch da lista (com confirmação)
         waitingStatuses: wrap.querySelector("#pf-statuses").value.split(",").map((s) => s.trim()).filter(Boolean),
         waitingJustifications: wrap.querySelector("#pf-justifications").value.split(",").map((s) => s.trim()).filter(Boolean),
-        thresholdBusinessDays: Number(wrap.querySelector("#pf-threshold").value),
+        thresholdBusinessHours: Number(wrap.querySelector("#pf-threshold").value),
+        autoCloseThresholdBusinessDays: Number(wrap.querySelector("#pf-close-threshold").value),
         checkIntervalHours: Number(wrap.querySelector("#pf-interval").value),
         reminderSenderId: wrap.querySelector("#pf-senderid").value.trim(),
         reminderSenderName: wrap.querySelector("#pf-sendername").value.trim(),
@@ -1055,6 +1128,136 @@
   function escapeAttr(s) {
     return escapeHtml(s).replace(/"/g, "&quot;");
   }
+
+  // --- aba "Cobranças" (o que a automação examinou/cobrou/fechou na última verificação) ---
+  const chargesList = document.getElementById("chargesList");
+  const autoCloseGateBanner = document.getElementById("autoCloseGateBanner");
+  const refreshChargesBtn = document.getElementById("refreshChargesBtn");
+  const chargeRunsWrap = document.getElementById("chargeRunsWrap");
+  let latestCharges = [];
+
+  const CHARGE_ACTION_LABEL = {
+    charged: "Cobrado agora",
+    closed: "Encerrado agora (falta de retorno)",
+    skipped_owner_not_last: "Cliente (ou outra pessoa) respondeu por último",
+    skipped_within_threshold: "Ainda dentro do prazo",
+    skipped_no_data: "Sem dado suficiente (sem owner/ação)",
+    skipped_wrong_team: "Fora do escopo (equipe)",
+    skipped_wrong_owner: "Fora do escopo (owner)",
+    skipped_wrong_justification: "Justificativa não monitorada",
+    error: "Erro (cobrança ou fechamento)",
+  };
+
+  // "Faltam Xh" — sempre em horas ÚTEIS (mesma unidade de elapsedBusinessHours), não
+  // relógio corrido; por isso não precisa de um timer client-side, só recalcula a cada
+  // "Atualizar" ou rodada nova. Vazio quando não se aplica (já cobrado/fechado/erro, ou
+  // fechamento desligado nesse perfil).
+  function fmtRemaining(elapsedHours, thresholdHours) {
+    if (typeof elapsedHours !== "number") return "—";
+    const remaining = Math.round((thresholdHours - elapsedHours) * 10) / 10;
+    return remaining <= 0 ? "vencido" : "faltam " + remaining + "h úteis";
+  }
+
+  function runTable(run) {
+    if (!run.tickets.length) return '<div class="empty">Nenhum chamado nesta rodada.</div>';
+    const openActions = new Set(["skipped_within_threshold", "skipped_owner_not_last"]);
+    const rows = run.tickets
+      .map((t) => {
+        const stillOpen = openActions.has(t.action);
+        return (
+          "<tr><td>#" + t.id + "</td><td class=\"subject\">" + escapeHtml(t.subject || "") + "</td><td>" +
+          escapeHtml(CHARGE_ACTION_LABEL[t.action] || t.action) + "</td><td>" +
+          (typeof t.elapsedBusinessHours === "number" ? t.elapsedBusinessHours + "h" : "—") + "</td><td>" +
+          (stillOpen ? fmtRemaining(t.elapsedBusinessHours, run.thresholdBusinessHours) : "—") + "</td><td>" +
+          (stillOpen && run.autoCloseEnabled ? fmtRemaining(t.elapsedBusinessHours, run.autoCloseThresholdHours) : "—") + "</td>" +
+          (t.errorMessage ? '<td style="color:var(--err)">' + escapeHtml(t.errorMessage) + "</td>" : "<td>—</td>") +
+          "</tr>"
+        );
+      })
+      .join("");
+    return (
+      '<div class="run-table-wrap"><table class="run-table"><thead><tr>' +
+      "<th>Chamado</th><th>Assunto</th><th>Resultado</th><th>Horas úteis decorridas</th>" +
+      "<th>P/ cobrar</th><th>P/ fechar</th><th>Detalhe</th>" +
+      "</tr></thead><tbody>" + rows + "</tbody></table></div>"
+    );
+  }
+
+  function renderChargeRuns(runs) {
+    if (!runs.length) {
+      chargeRunsWrap.innerHTML = '<div class="empty">Nenhuma verificação rodou ainda.</div>';
+      return;
+    }
+    chargeRunsWrap.innerHTML = runs
+      .map(
+        (r) =>
+          '<div class="charge-sub" style="margin:14px 0 6px;">' + escapeHtml(r.profileName) + " · " + escapeHtml(r.scopeLabel) +
+          " — verificado em " + new Date(r.ranAt).toLocaleString("pt-BR") + " (" + r.checkedCount + " chamado(s)) · " +
+          "cobra com " + r.thresholdBusinessHours + "h úteis" +
+          (r.autoCloseEnabled ? " · fecha com " + r.autoCloseThresholdHours + "h úteis" : " · fechamento desligado") +
+          "</div>" + runTable(r),
+      )
+      .join("");
+  }
+
+  function renderAutoCloseGateBanner(enabled) {
+    autoCloseGateBanner.className = "gate-banner " + (enabled ? "on" : "off");
+    autoCloseGateBanner.innerHTML =
+      '<span class="gate-dot"></span><span>' +
+      (enabled
+        ? "Fechamento automático LIGADO globalmente (FOLLOWUP_AUTOCLOSE_ENABLED=true). Perfis com o switch de fechamento marcado encerram chamados sozinhos ao vencer o prazo."
+        : "Fechamento automático DESLIGADO globalmente (FOLLOWUP_AUTOCLOSE_ENABLED não é \"true\" no ambiente). " +
+          "A coluna \"P/ fechar\" abaixo não aparece enquanto isso não mudar no .env — nenhum chamado é encerrado sozinho.") +
+      "</span>";
+  }
+
+  async function loadCharges() {
+    chargesList.innerHTML = '<div class="empty">Carregando…</div>';
+    chargeRunsWrap.innerHTML = '<div class="empty">Carregando…</div>';
+    try {
+      const [chargesRes, lastRunsRes] = await Promise.all([
+        fetch("/api/followup/charges"),
+        fetch("/api/followup/last-runs"),
+      ]);
+      const data = await chargesRes.json();
+      renderAutoCloseGateBanner(data.autoCloseEnabled);
+      latestCharges = data.charges || [];
+      renderCharges();
+
+      const lastRuns = await lastRunsRes.json();
+      renderChargeRuns(lastRuns.chargeRuns || []);
+    } catch (err) {
+      chargesList.innerHTML = '<div class="empty">Falha ao carregar cobranças: ' + escapeHtml(String(err)) + "</div>";
+      chargeRunsWrap.innerHTML = "";
+    }
+  }
+
+  function renderCharges() {
+    if (!latestCharges.length) {
+      chargesList.innerHTML = '<div class="empty">Nenhum chamado foi cobrado ainda.</div>';
+      return;
+    }
+    // Mais recentes primeiro.
+    const sorted = [...latestCharges].sort((a, b) => new Date(b.chargedAt) - new Date(a.chargedAt));
+    chargesList.innerHTML = "";
+    for (const c of sorted) {
+      const card = document.createElement("div");
+      card.className = "charge-card";
+      card.innerHTML =
+        '<div class="charge-head">' +
+        '<div><div class="charge-title">#' + c.ticketId + " — " + escapeHtml(c.subject || "") + '</div>' +
+        '<div class="charge-sub">' + escapeHtml(c.profileName) + (c.ownerTeam ? " · " + escapeHtml(c.ownerTeam) : "") + '</div></div>' +
+        '<span class="charge-badge ' + c.status + '">' + (c.status === "closed" ? "Encerrado" : "Aguardando resposta") + "</span>" +
+        "</div>" +
+        '<div class="charge-meta">' +
+        "<span>Cobrado em: <b>" + new Date(c.chargedAt).toLocaleString("pt-BR") + "</b></span>" +
+        (c.resolvedAt ? "<span>Encerrado em: <b>" + new Date(c.resolvedAt).toLocaleString("pt-BR") + "</b></span>" : "") +
+        "</div>";
+      chargesList.appendChild(card);
+    }
+  }
+
+  refreshChargesBtn.addEventListener("click", loadCharges);
 })();
 </script>
 </body>

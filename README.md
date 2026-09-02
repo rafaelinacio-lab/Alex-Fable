@@ -214,6 +214,46 @@ interruptor é geral: mesmo com perfis habilitados no painel, nada roda enquanto
 for `true`. Depois de ativado, cada perfil roda sozinho no seu próprio intervalo
 (verificado a cada `FOLLOWUP_TICK_MINUTES`, padrão 15min — não precisa mexer nisso).
 
+O prazo de silêncio (`thresholdBusinessHours`) é contado em **HORAS úteis** (padrão 24h),
+não dias — confirmado com o usuário para poder expressar um valor exato em vez de uma
+aproximação em dias úteis cheios.
+
+## Aba "Cobranças" e fechamento automático (opcional)
+
+Cobrar e fechar são decididos na **MESMA passada** por chamado (`evaluateTicket` em
+`src/agent/followUp.ts`) — não é um sistema separado que roda depois: cada chamado
+examinado é avaliado uma vez e o resultado é cobrar, fechar, ou não fazer nada.
+
+Opcionalmente, um chamado cujo **owner** está em silêncio há tempo demais pode ser
+**fechado sozinho** (`status: "Resolvido"`), com uma ação pública explicando o motivo,
+publicada pela mesma identidade que cobra. Regra (confirmada com o usuário, 2026-09-01):
+
+1. escopo, status/justification e "última ação real foi do owner" — mesmas três
+   primeiras condições da cobrança (ver acima; "real" já exclui as próprias ações da
+   automação, então uma cobrança anterior não é tratada como resposta de ninguém);
+2. o tempo decorrido desde essa última ação real do owner (não desde uma cobrança
+   anterior — o fechamento **não depende** de o chamado já ter sido cobrado) já passou
+   de `autoCloseThresholdBusinessDays` (regra de SLA do perfil — padrão 3 dias úteis).
+
+Fechar tem prioridade sobre cobrar: se o prazo de fechamento (mais longo) já venceu, o
+chamado é fechado direto, sem mandar cobrança antes.
+
+É uma automação **mais sensível** que só publicar uma mensagem (fechar não dá pra
+desfazer com uma nova mensagem), por isso tem gate **duplo e independente** do de cobrar:
+
+- `FOLLOWUP_AUTOCLOSE_ENABLED=false` no `.env` (interruptor geral, separado de
+  `FOLLOWUP_AUTOMATION_ENABLED` — ligar a cobrança nunca liga o fechamento);
+- `autoCloseEnabled` por perfil (painel, switch dedicado — pede confirmação explícita ao
+  ligar, porque é uma mutação autônoma sem revisão humana).
+
+Os dois precisam estar ligados para aquele perfil fechar chamados sozinho.
+
+A aba **"Cobranças"** do painel tem duas partes: **"Última verificação"** (por perfil) —
+todo chamado examinado na rodada mais recente, cobrado/fechado/pulado com o motivo,
+horas úteis decorridas, e quanto falta para cobrar/fechar cada um (calculado do estado
+real do chamado, não de um valor congelado); e **"Histórico de cobranças enviadas"** —
+só quando cada chamado recebeu a mensagem de cobrança (`src/store/followUpCharges.ts`).
+
 ## Segurança e operação
 
 - O `MOVIDESK_TOKEN` só existe dentro de `src/movidesk/client.ts`. O modelo nunca vê o

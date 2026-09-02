@@ -29,7 +29,9 @@ import {
   type FollowUpProfileInput,
 } from "../config/followUpProfiles.js";
 import { runFollowUpCheck } from "../agent/followUp.js";
-import { isFollowUpAutomationEnabled } from "../config/followUp.js";
+import { isFollowUpAutomationEnabled, isFollowUpAutoCloseEnabled } from "../config/followUp.js";
+import { listCharges } from "../store/followUpCharges.js";
+import { listChargeRuns } from "../store/followUpRunLog.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DASHBOARD_HTML_PATH = path.join(__dirname, "..", "..", "public", "dashboard.html");
@@ -161,6 +163,27 @@ export function startDashboardServer(
     function json(status: number, body: unknown): void {
       res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
       res.end(JSON.stringify(body));
+    }
+
+    if (parts[2] === "charges") {
+      if (!parts[3] && method === "GET") {
+        // Fechar e cobrar acontecem na MESMA passada por chamado (evaluateTicket, ver
+        // src/agent/followUp.ts) — não há mais um prazo separado "desde a cobrança" pra
+        // calcular aqui; a lista abaixo é só histórico de QUANDO cada cobrança foi
+        // enviada. "Quanto falta pra fechar" fica na "Última verificação"
+        // (/api/followup/last-runs), calculado a partir do estado real do chamado.
+        const charges = await listCharges();
+        json(200, { charges, autoCloseEnabled: isFollowUpAutoCloseEnabled() });
+        return;
+      }
+      json(404, { error: "rota não encontrada" });
+      return;
+    }
+
+    if (parts[2] === "last-runs" && method === "GET") {
+      const chargeRuns = await listChargeRuns();
+      json(200, { chargeRuns });
+      return;
     }
 
     if (parts[2] !== "profiles") {

@@ -14,14 +14,15 @@
  * intervalo de verificação, remetente e se está ligado.
  *
  * Escopo por owner (em vez de equipe): pedido do usuário para poder cobrar os chamados
- * de UMA PESSOA específica, não só de uma equipe inteira. Diferente do escopo por
- * equipe, não filtramos por owner no `$filter` OData — não há um exemplo confirmado na
- * doc de filtro por propriedade de navegação singular (`owner/id eq '...'`, diferente de
- * `clients/any(...)` que é array e está confirmado), então seguimos o mesmo princípio já
- * usado em todo o projeto (nunca inventar sintaxe OData não confirmada): a busca traz os
- * chamados só pelo `status`, e o filtro por owner acontece localmente em
- * `evaluateTicket` (mesma ideia de `only_open`, só que aqui é a ÚNICA camada de filtro,
- * não uma segunda em cima do servidor).
+ * de UMA PESSOA específica, não só de uma equipe inteira. A doc pública só documenta
+ * filtro por coleção (`clients/any(...)`), não por propriedade de navegação singular —
+ * mas testamos `owner/id eq '<COD_REF>'` ao vivo (2026-08-31, tenant VIASOFT) e funciona
+ * (docs/movidesk-api-tickets.md, seção 6.7; `owner.id`/`ownerId` foram testados e dão
+ * 400 — só a sintaxe com barra é aceita). `runFollowUpCheck` usa esse filtro no servidor
+ * (evita paginar a base inteira só para descartar quase tudo localmente — chegou a levar
+ * ~15 páginas/minutos para achar ~10 chamados de um owner num tenant com 1400+ tickets
+ * "Aguardando"), e `evaluateTicket` confere `owner.id` de novo localmente, mesmo padrão
+ * de defesa em profundidade já usado para `ownerTeam`.
  *
  * O gate global `FOLLOWUP_AUTOMATION_ENABLED` (env) continua existindo como interruptor
  * geral — nenhum perfil roda se ele não for "true", mesmo que o perfil individual esteja
@@ -61,7 +62,23 @@ export interface FollowUpProfile {
   waitingStatuses: string[];
   /** Ver nota no topo do arquivo — filtro adicional por `justification`, opcional. */
   waitingJustifications?: string[];
-  thresholdBusinessDays: number;
+  /** Prazo de silêncio (do owner) em HORAS ÚTEIS — não dias, para poder expressar valores
+   * exatos como 24 (confirmado com o usuário) em vez de uma aproximação em dias úteis
+   * cheios (24h úteis não é um número redondo de dias úteis num expediente de 8h45). */
+  thresholdBusinessHours: number;
+  /** Fechar sozinho (status "Resolvido") um chamado, se o OWNER estiver em silêncio há
+   * mais de `autoCloseThresholdBusinessDays` (regra confirmada com o usuário, 2026-09-01:
+   * "3 dias úteis, de acordo com a regra de SLA" — contado DIRETO da última ação real do
+   * owner até o momento da verificação, independente de já ter sido cobrado antes ou não;
+   * numa mesma passada por chamado, fechar tem prioridade sobre cobrar — ver
+   * evaluateTicket em src/agent/followUp.ts). Padrão false — é uma mutação mais sensível
+   * que só cobrar (não dá pra desfazer com uma mensagem), então exige opt-in explícito
+   * por perfil, ALÉM do gate global `FOLLOWUP_AUTOCLOSE_ENABLED` (ver
+   * src/config/followUp.ts). */
+  autoCloseEnabled: boolean;
+  /** Em DIAS úteis (não horas, diferente de thresholdBusinessHours) — mesma unidade usada
+   * na regra de SLA original do usuário ("3 dias úteis"). */
+  autoCloseThresholdBusinessDays: number;
   checkIntervalHours: number;
   reminderSenderId: string;
   reminderSenderName: string;
@@ -83,7 +100,9 @@ export type FollowUpProfileInput = Pick<
   | "enabled"
   | "waitingStatuses"
   | "waitingJustifications"
-  | "thresholdBusinessDays"
+  | "thresholdBusinessHours"
+  | "autoCloseEnabled"
+  | "autoCloseThresholdBusinessDays"
   | "checkIntervalHours"
   | "reminderSenderId"
   | "reminderSenderName"
@@ -92,7 +111,16 @@ export type FollowUpProfileInput = Pick<
 
 const PROFILES_FILE = process.env.FOLLOWUP_PROFILES_FILE ?? "./data/local/followup_profiles.json";
 
-const DEFAULT_WAITING_STATUSES = ["Aguardando Retorno do Cliente", "Aguardando Validação do Cliente"];
+// Valores confirmados em produção real (tenant VIASOFT, equipe Sistemas Internos, ver
+// nota grande acima sobre `waitingJustifications`): o `status` do chamado é o texto
+// genérico "Aguardando" — "Aguardando Retorno do Cliente"/"Aguardando Validação do
+// Cliente" NUNCA existem como valor de `status` neste tenant, só como `justification`
+// (com capitalização inconsistente entre os dois: "Retorno do cliente" vs "Validação
+// Cliente" — confirmado via amostragem de tickets reais). Usar o texto composto antigo
+// como `status` fazia o `$filter` (comparação exata, `eq`) nunca bater com nada — o
+// perfil-semente ficava sempre com checkedCount 0, silenciosamente, sem nenhum erro.
+const DEFAULT_WAITING_STATUSES = ["Aguardando"];
+const DEFAULT_WAITING_JUSTIFICATIONS = ["Retorno do cliente", "Validação Cliente"];
 
 /**
  * Perfil-semente, usado só quando o arquivo de perfis ainda não existe (primeira
@@ -110,7 +138,15 @@ function seedProfile(): FollowUpProfile {
     ownerTeam: process.env.FOLLOWUP_OWNER_TEAM ?? "VIASOFT - Sistemas Internos",
     enabled: true,
     waitingStatuses: DEFAULT_WAITING_STATUSES,
-    thresholdBusinessDays: Number(process.env.FOLLOWUP_THRESHOLD_BUSINESS_DAYS ?? 3),
+    waitingJustifications: DEFAULT_WAITING_JUSTIFICATIONS,
+    // 24h úteis: regra confirmada com o usuário (2026-08-31) — cobra quando a última ação
+    // foi do owner e nenhum cliente do ticket respondeu há mais de 24 HORAS ÚTEIS.
+    thresholdBusinessHours: Number(process.env.FOLLOWUP_THRESHOLD_BUSINESS_HOURS ?? 24),
+    // Seguro por padrão — fechar sozinho é opt-in explícito (painel + gate global), nunca
+    // ligado automaticamente só por existir o perfil.
+    autoCloseEnabled: false,
+    // 3 dias úteis: regra de SLA confirmada com o usuário (2026-09-01).
+    autoCloseThresholdBusinessDays: Number(process.env.FOLLOWUP_AUTOCLOSE_THRESHOLD_BUSINESS_DAYS ?? 3),
     checkIntervalHours: Number(process.env.FOLLOWUP_CHECK_INTERVAL_HOURS ?? 24),
     reminderSenderId: process.env.FOLLOWUP_SENDER_COD_REF ?? "007",
     reminderSenderName: "Alex Fable",
@@ -159,7 +195,8 @@ function validateInput(input: FollowUpProfileInput): void {
     throw new Error(`scopeType inválido: ${String(input.scopeType)} (use "team" ou "owner").`);
   }
   if (!input.waitingStatuses.length) throw new Error("Informe ao menos um status monitorado.");
-  if (input.thresholdBusinessDays <= 0) throw new Error("thresholdBusinessDays deve ser positivo.");
+  if (input.thresholdBusinessHours <= 0) throw new Error("thresholdBusinessHours deve ser positivo.");
+  if (input.autoCloseThresholdBusinessDays <= 0) throw new Error("autoCloseThresholdBusinessDays deve ser positivo.");
   if (input.checkIntervalHours <= 0) throw new Error("checkIntervalHours deve ser positivo.");
   if (!input.reminderSenderId.trim()) throw new Error("reminderSenderId (cod_ref) não pode ser vazio.");
   const { morningStart, morningEnd, afternoonStart, afternoonEnd } = input.schedule;

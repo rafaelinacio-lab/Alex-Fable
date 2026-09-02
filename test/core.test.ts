@@ -17,8 +17,9 @@ import { emitEvent, newEventId } from "../src/observability/eventBus.js";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { businessMinutesElapsed, businessDaysToMinutes, BUSINESS_MINUTES_PER_DAY, SLA_SCHEDULE } from "../src/movidesk/businessHours.js";
+import { businessMinutesElapsed, businessDaysToMinutes, addBusinessMinutes, BUSINESS_MINUTES_PER_DAY, SLA_SCHEDULE } from "../src/movidesk/businessHours.js";
 import { evaluateTicket, runFollowUpCheck } from "../src/agent/followUp.js";
+import { FOLLOWUP_ACTION_MARKER } from "../src/config/followUp.js";
 import {
   listFollowUpProfiles,
   createFollowUpProfile,
@@ -390,13 +391,41 @@ test("businessMinutesElapsed calcula horário útil conforme o SLA (seg-sex 07:4
   assert.equal(businessMinutesElapsed(new Date("2026-03-30T13:00:00Z"), new Date("2026-03-30T13:00:00Z")), 0);
 });
 
+test("addBusinessMinutes projeta quando um prazo em horas úteis se esgota (inverso de businessMinutesElapsed)", () => {
+  // Round-trip com o caso já confirmado acima: sexta 10:00 local + 525min úteis (1 dia
+  // útil cheio) cai exatamente em segunda 10:00 local — mesma dupla de datas que
+  // businessMinutesElapsed já confirma valer 525min.
+  assert.equal(
+    addBusinessMinutes(new Date("2026-03-27T13:00:00Z"), 525).toISOString(),
+    new Date("2026-03-30T13:00:00Z").toISOString(),
+  );
+
+  // 0 minutos -> devolve a mesma data, sem alteração.
+  const same = new Date("2026-03-30T15:00:00Z");
+  assert.equal(addBusinessMinutes(same, 0).toISOString(), same.toISOString());
+
+  // Atravessa o intervalo de almoço (12:00-13:30 local): partindo de segunda 11:45 local,
+  // restam 15min de manhã; os 10min excedentes caem 10min depois do início da tarde
+  // (13:40 local), nunca dentro do almoço.
+  assert.equal(
+    addBusinessMinutes(new Date("2026-03-30T14:45:00Z"), 25).toISOString(),
+    new Date("2026-03-30T16:40:00Z").toISOString(),
+  );
+
+  // Prazo maior que 1 dia útil, começando numa sexta -> pula o fim de semana inteiro.
+  assert.equal(
+    addBusinessMinutes(new Date("2026-03-27T13:00:00Z"), 625).toISOString(),
+    new Date("2026-03-30T14:40:00Z").toISOString(),
+  );
+});
+
 test("evaluateTicket (cobrança automática): só cobra quando última ação é do owner E o prazo em horas úteis venceu", () => {
   const now = new Date("2026-04-08T15:00:00Z"); // quarta-feira, 12:00 local
 
   const profile = {
     scopeType: "team" as const,
     ownerTeam: "VIASOFT - Sistemas Internos",
-    thresholdBusinessDays: 3,
+    thresholdBusinessHours: 24, // confirmado com o usuário: 24h úteis, não dias úteis
     schedule: SLA_SCHEDULE,
   };
 
@@ -408,7 +437,7 @@ test("evaluateTicket (cobrança automática): só cobra quando última ação é
     owner: { id: "007-owner" },
   };
 
-  // Owner respondeu há 4 dias úteis -> vence o prazo de 3 dias úteis -> cobra
+  // Owner respondeu há ~5 dias úteis (~43,75h úteis) -> vence o prazo de 24h úteis -> cobra
   const vencido = {
     ...base,
     actions: [{ createdDate: "2026-04-01T15:00:00Z", createdBy: { id: "007-owner" } }],
@@ -427,7 +456,7 @@ test("evaluateTicket (cobrança automática): só cobra quando última ação é
   };
   assert.equal(evaluateTicket(clienteRespondeu, profile, now).action, "skipped_owner_not_last");
 
-  // Owner respondeu ontem (dentro do prazo de 3 dias úteis) -> ainda não cobra
+  // Owner respondeu ontem (~8,75h úteis, dentro do prazo de 24h úteis) -> ainda não cobra
   const dentroDoPrazo = {
     ...base,
     id: 3,
@@ -441,9 +470,86 @@ test("evaluateTicket (cobrança automática): só cobra quando última ação é
   assert.equal(evaluateTicket(semOwner, profile, now).action, "skipped_no_data");
 
   // Equipe diferente de "VIASOFT - Sistemas Internos" -> nunca cobra, mesmo vencido e
-  // com a última ação do owner (escopo confirmado pelo usuário: só essa equipe).
+  // com a última ação do owner (escopo confirmado pelo usuário: só essa equipe). As
+  // horas úteis decorridas são calculadas mesmo quando o chamado é pulado por outro
+  // motivo (pedido do usuário: quer ver "há quanto tempo" mesmo nos que não foram
+  // cobrados) — não fica mais hardcoded em 0.
   const outraEquipe = { ...vencido, id: 5, ownerTeam: "VIASOFT - Suporte Oracle Cloud" };
-  assert.equal(evaluateTicket(outraEquipe, profile, now).action, "skipped_wrong_team");
+  const resultadoOutraEquipe = evaluateTicket(outraEquipe, profile, now);
+  assert.equal(resultadoOutraEquipe.action, "skipped_wrong_team");
+  assert.ok(resultadoOutraEquipe.elapsedBusinessHours > 0, "esperava horas úteis decorridas > 0 mesmo num chamado pulado");
+});
+
+test("evaluateTicket ignora as próprias ações desta automação (marcador, não só o id) ao decidir quem agiu por último", () => {
+  const now = new Date("2026-04-08T15:00:00Z"); // quarta-feira, 12:00 local
+  const profile = {
+    scopeType: "team" as const,
+    ownerTeam: "VIASOFT - Sistemas Internos",
+    thresholdBusinessHours: 24,
+    schedule: SLA_SCHEDULE,
+    reminderSenderId: "007", // cod_ref do "Alex Fable"
+  };
+  const base = {
+    id: 1,
+    subject: "Chamado já cobrado antes",
+    status: "Aguardando Retorno do Cliente",
+    ownerTeam: "VIASOFT - Sistemas Internos",
+    owner: { id: "007-owner" },
+    statusHistories: [{ status: "Aguardando Retorno do Cliente", changedDate: "2026-04-01T15:00:00Z" }],
+  };
+
+  // Owner agiu (vencido) e DEPOIS a própria automação mandou uma cobrança (marcador no
+  // description). Sem filtrar isso, a "última ação" seria da automação, não do owner ->
+  // nunca mais cobraria. Filtrando pelo marcador, a última ação REAL continua sendo do
+  // owner -> ainda pode ser reavaliado.
+  const jaCobradoPelaAutomacao = {
+    ...base,
+    actions: [
+      { createdDate: "2026-04-01T15:00:00Z", createdBy: { id: "007-owner" } },
+      { createdDate: "2026-04-02T09:00:00Z", createdBy: { id: "007" }, description: "texto" + FOLLOWUP_ACTION_MARKER },
+    ],
+  };
+  const resultado = evaluateTicket(jaCobradoPelaAutomacao, profile, now);
+  assert.equal(resultado.action, "charged");
+  assert.ok(resultado.elapsedBusinessHours > 0);
+
+  // Se, depois da cobrança da automação, o CLIENTE (não a automação) respondeu de
+  // verdade -> aí sim conta como resposta e não cobra.
+  const clienteRespondeuDepoisDaCobranca = {
+    ...jaCobradoPelaAutomacao,
+    id: 2,
+    actions: [...jaCobradoPelaAutomacao.actions, { createdDate: "2026-04-02T10:00:00Z", createdBy: { id: "cliente-123" } }],
+  };
+  assert.equal(evaluateTicket(clienteRespondeuDepoisDaCobranca, profile, now).action, "skipped_owner_not_last");
+
+  // Caso real (#891587, confirmado ao vivo 2026-09-01): o OWNER do chamado é o próprio
+  // "Alex Fable" (fila não atribuída a uma pessoa) — reminderSenderId === owner.id. Uma
+  // ação genuína de "007" SEM o marcador (não é uma cobrança desta automação) ainda
+  // conta como atividade real do owner -> ainda pode ser cobrado quando vencer.
+  const ownerEhOProprioBot = {
+    id: 3,
+    subject: "Fila não atribuída",
+    status: "Aguardando Retorno do Cliente",
+    ownerTeam: "VIASOFT - Sistemas Internos",
+    owner: { id: "007" }, // owner É o Alex Fable
+    statusHistories: [{ status: "Aguardando Retorno do Cliente", changedDate: "2026-04-01T15:00:00Z" }],
+    actions: [{ createdDate: "2026-04-01T15:00:00Z", createdBy: { id: "007" }, description: "triagem automática (sem marcador)" }],
+  };
+  assert.equal(evaluateTicket(ownerEhOProprioBot, profile, now).action, "charged");
+
+  // Mesmo caso, mas com uma cobrança desta automação (marcador) DEPOIS da ação real do
+  // owner-bot -> a cobrança é filtrada, a referência continua sendo a ação real anterior
+  // (não a data da cobrança) -> o chamado ainda vence e é cobrado de novo, sem a própria
+  // cobrança resetar o prazo pra sempre.
+  const ownerBotComCobrancaPropria = {
+    ...ownerEhOProprioBot,
+    id: 4,
+    actions: [
+      ...ownerEhOProprioBot.actions,
+      { createdDate: "2026-04-02T09:00:00Z", createdBy: { id: "007" }, description: "texto" + FOLLOWUP_ACTION_MARKER },
+    ],
+  };
+  assert.equal(evaluateTicket(ownerBotComCobrancaPropria, profile, now).action, "charged");
 });
 
 test("evaluateTicket com escopo por owner: cobra só chamados daquele responsável específico, ignorando a equipe", () => {
@@ -451,7 +557,7 @@ test("evaluateTicket com escopo por owner: cobra só chamados daquele responsáv
   const perfilPorOwner = {
     scopeType: "owner" as const,
     ownerId: "007-owner",
-    thresholdBusinessDays: 3,
+    thresholdBusinessHours: 24,
     schedule: SLA_SCHEDULE,
   };
   const vencido = {
@@ -471,15 +577,15 @@ test("evaluateTicket com escopo por owner: cobra só chamados daquele responsáv
 });
 
 test("evaluateTicket respeita a janela de expediente PRÓPRIA do perfil (SLAs diferentes por equipe)", () => {
-  // Perfil com expediente maior (08:00-20:00, sem intervalo) -> mesmo prazo em DIAS úteis
-  // vence mais rápido em horas de relógio do que o perfil padrão (525min/dia).
+  // Mesmo prazo em HORAS úteis, mas expediente maior (08:00-20:00, sem intervalo) faz o
+  // dia render mais rápido em horas de relógio do que o perfil padrão (525min/dia).
   const perfilExpedienteLongo = {
     scopeType: "team" as const,
     ownerTeam: "Equipe Plantão",
-    thresholdBusinessDays: 1,
+    thresholdBusinessHours: 12,
     schedule: { morningStart: 8 * 60, morningEnd: 12 * 60, afternoonStart: 12 * 60, afternoonEnd: 20 * 60 },
   };
-  // 1 dia útil neste perfil = 720min (12h). Referência: seg 08:00 local (11:00 UTC).
+  // 12h úteis. Referência: seg 08:00 local (11:00 UTC).
   const ticket = {
     id: 10,
     subject: "Chamado plantão",
@@ -514,7 +620,7 @@ test("followUpProfiles: CRUD completo persiste em disco e valida a janela de exp
     ownerTeam: "VIASOFT - Equipe Teste",
     enabled: true,
     waitingStatuses: ["Aguardando Retorno do Cliente"],
-    thresholdBusinessDays: 2,
+    thresholdBusinessHours: 16,
     checkIntervalHours: 12,
     reminderSenderId: "999",
     reminderSenderName: "Alex Fable",
@@ -524,8 +630,8 @@ test("followUpProfiles: CRUD completo persiste em disco e valida a janela de exp
   assert.ok(created.id);
   assert.equal((await listFollowUpProfiles()).length, 2);
 
-  const updated = await updateFollowUpProfile(created.id, { ...input, thresholdBusinessDays: 5 });
-  assert.equal(updated.thresholdBusinessDays, 5);
+  const updated = await updateFollowUpProfile(created.id, { ...input, thresholdBusinessHours: 40 });
+  assert.equal(updated.thresholdBusinessHours, 40);
   assert.equal(updated.id, created.id);
 
   await deleteFollowUpProfile(created.id);
@@ -581,7 +687,7 @@ test("painel: API /api/followup/profiles faz CRUD via HTTP (aba Automação)", a
         ownerTeam: "VIASOFT - Equipe HTTP",
         enabled: true,
         waitingStatuses: ["Aguardando Retorno do Cliente"],
-        thresholdBusinessDays: 2,
+        thresholdBusinessHours: 16,
         checkIntervalHours: 6,
         reminderSenderId: "123",
         reminderSenderName: "Alex Fable",
@@ -647,7 +753,7 @@ test("runFollowUpCheck: quando não encontra nenhum chamado, roda diagnóstico e
     ownerTeam: "VIASOFT - Sistemas Internos",
     enabled: true,
     waitingStatuses: ["Aguardando Retorno do Cliente", "Aguardando Validação do Cliente"],
-    thresholdBusinessDays: 3,
+    thresholdBusinessHours: 24,
     checkIntervalHours: 24,
     reminderSenderId: "007",
     reminderSenderName: "Alex Fable",
@@ -680,7 +786,7 @@ test("evaluateTicket com waitingJustifications: distingue por 'justification' qu
     scopeType: "team" as const,
     ownerTeam: "VIASOFT - Sistemas Internos",
     waitingJustifications: ["Validação Cliente"],
-    thresholdBusinessDays: 3,
+    thresholdBusinessHours: 24,
     schedule: SLA_SCHEDULE,
   };
 
@@ -703,7 +809,7 @@ test("evaluateTicket com waitingJustifications: distingue por 'justification' qu
     ],
   };
 
-  // Vencido (mais de 3 dias úteis desde 28/08) e justification bate -> cobra.
+  // Vencido (mais de 24h úteis desde a última ação do owner, 31/08) e justification bate -> cobra.
   assert.equal(evaluateTicket(ticket, perfilComJustification, now).action, "charged");
 
   // Mesmo chamado, mas o perfil só monitora outra justificativa -> nunca cobra por esse perfil.
@@ -713,4 +819,47 @@ test("evaluateTicket com waitingJustifications: distingue por 'justification' qu
   // Sem waitingJustifications configurado (comportamento antigo) -> ignora o campo, só olha status.
   const perfilSemJustification = { ...perfilComJustification, waitingJustifications: undefined };
   assert.equal(evaluateTicket(ticket, perfilSemJustification, now).action, "charged");
+});
+
+test("evaluateTicket fecha (should_close) quando o owner está em silêncio há mais que autoCloseThresholdBusinessDays — direto, sem depender de cobrança prévia", () => {
+  const now = new Date("2026-04-08T15:00:00Z"); // quarta-feira, 12:00 local
+  const base = {
+    id: 1,
+    subject: "Chamado parado há dias",
+    status: "Aguardando Retorno do Cliente",
+    ownerTeam: "VIASOFT - Sistemas Internos",
+    owner: { id: "007-owner" },
+    // Última ação real do owner ~5 dias úteis (~43,75h úteis) antes de `now` — mesmo
+    // ticket "vencido" do primeiro teste de evaluateTicket, elapsed já confirmado ali.
+    actions: [{ createdDate: "2026-04-01T15:00:00Z", createdBy: { id: "007-owner" } }],
+    statusHistories: [{ status: "Aguardando Retorno do Cliente", changedDate: "2026-04-01T15:00:00Z" }],
+  };
+  const profileBase = {
+    scopeType: "team" as const,
+    ownerTeam: "VIASOFT - Sistemas Internos",
+    thresholdBusinessHours: 24,
+    schedule: SLA_SCHEDULE,
+    reminderSenderId: "007",
+  };
+
+  // autoCloseEnabled desligado -> nunca fecha por este motivo, cai no fluxo normal de
+  // cobrança (43,75h > 24h de prazo de cobrança -> charged).
+  assert.equal(
+    evaluateTicket(base, { ...profileBase, autoCloseEnabled: false, autoCloseThresholdBusinessDays: 3 }, now).action,
+    "charged",
+  );
+
+  // autoCloseEnabled ligado, mas prazo de fechamento ainda não venceu (6 dias úteis =
+  // 52,5h > 43,75h decorridas) -> ainda não fecha, mas já cobra (43,75h > 24h).
+  assert.equal(
+    evaluateTicket(base, { ...profileBase, autoCloseEnabled: true, autoCloseThresholdBusinessDays: 6 }, now).action,
+    "charged",
+  );
+
+  // autoCloseEnabled ligado E prazo de fechamento (3 dias úteis = 26,25h) já venceu
+  // (43,75h decorridas) -> fecha DIRETO, mesmo esse chamado nunca tendo sido cobrado
+  // antes (regra confirmada com o usuário, 2026-09-01: não depende de cobrança prévia).
+  const resultado = evaluateTicket(base, { ...profileBase, autoCloseEnabled: true, autoCloseThresholdBusinessDays: 3 }, now);
+  assert.equal(resultado.action, "should_close");
+  assert.ok(resultado.elapsedBusinessHours > 26.25);
 });
