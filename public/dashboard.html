@@ -225,6 +225,38 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
+  /* Markdown leve dentro das bolhas (ver renderMarkdownLite) */
+  .bubble code {
+    background: rgba(127, 127, 127, 0.18);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12.5px;
+  }
+  .bubble pre.msg-code {
+    background: #0d1219;
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin: 6px 0;
+    overflow-x: auto;
+    max-width: 100%;
+  }
+  .bubble pre.msg-code code {
+    background: none;
+    padding: 0;
+    font-size: 12.5px;
+    line-height: 1.5;
+    white-space: pre;
+  }
+  .bubble ul { margin: 4px 0; padding-left: 20px; }
+  .bubble li { margin: 2px 0; }
+  .bubble strong { font-weight: 700; }
+  .bubble em { font-style: italic; }
+  .mdjson-key { color: #7ee787; }
+  .mdjson-str { color: #a5d6ff; }
+  .mdjson-num { color: #f0883e; }
+  .mdjson-bool, .mdjson-null { color: #d2a8ff; }
   #chatForm {
     display: flex;
     gap: 8px;
@@ -536,6 +568,78 @@
       .replace(/>/g, "&gt;");
   }
 
+  // Markdown leve para as mensagens do agente na aba Conversa — antes o texto vinha cru
+  // (**negrito**, ```json ... ```, "- item" apareciam literalmente). Sem lib externa de
+  // propósito (ferramenta interna, evita dependência de CDN); cobre só o que o modelo
+  // realmente usa: negrito, código inline, blocos de código (com syntax highlight bem
+  // simples para JSON), listas e parágrafos. SEMPRE escapa antes de formatar — nunca
+  // confia em HTML vindo do modelo ou de dados de ticket ecoados na resposta.
+  function highlightJson(code) {
+    return code.replace(
+      /("(\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(\.\d+)?([eE][+-]?\d+)?)/g,
+      (match) => {
+        let cls = "mdjson-num";
+        if (/^"/.test(match)) cls = /:$/.test(match) ? "mdjson-key" : "mdjson-str";
+        else if (/true|false/.test(match)) cls = "mdjson-bool";
+        else if (/null/.test(match)) cls = "mdjson-null";
+        return '<span class="' + cls + '">' + match + "</span>";
+      },
+    );
+  }
+
+  function renderInline(text) {
+    return escapeHtml(text)
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+  }
+
+  function renderMarkdownLite(raw) {
+    const text = String(raw);
+    const blocks = [];
+    // Extrai blocos ```lang\n...\n``` primeiro, para não aplicar negrito/itálico dentro deles.
+    const withPlaceholders = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_m, lang, code) => {
+      const trimmed = code.replace(/\n$/, "");
+      const html =
+        '<pre class="msg-code"><code>' +
+        (lang.toLowerCase() === "json" ? highlightJson(escapeHtml(trimmed)) : escapeHtml(trimmed)) +
+        "</code></pre>";
+      blocks.push(html);
+      return " " + (blocks.length - 1) + " ";
+    });
+
+    const lines = withPlaceholders.split("\n");
+    const htmlParts = [];
+    let listBuffer = [];
+    function flushList() {
+      if (listBuffer.length) {
+        htmlParts.push("<ul>" + listBuffer.map((li) => "<li>" + renderInline(li) + "</li>").join("") + "</ul>");
+        listBuffer = [];
+      }
+    }
+    for (const line of lines) {
+      const placeholderMatch = line.match(/^\s*(\d+)\s*$/);
+      if (placeholderMatch) {
+        flushList();
+        htmlParts.push(blocks[Number(placeholderMatch[1])]);
+        continue;
+      }
+      const listMatch = line.match(/^\s*[-*]\s+(.*)/);
+      if (listMatch) {
+        listBuffer.push(listMatch[1]);
+        continue;
+      }
+      flushList();
+      if (line.trim() === "") {
+        htmlParts.push("<br>");
+      } else {
+        htmlParts.push(renderInline(line) + "<br>");
+      }
+    }
+    flushList();
+    return htmlParts.join("");
+  }
+
   function connect() {
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(proto + "//" + location.host + "/ws");
@@ -626,7 +730,11 @@
           : message.role === "system"
             ? "automação"
             : "";
-      el.innerHTML = escapeHtml(message.text) + (meta ? '<span class="meta">' + meta + "</span>" : "");
+      const body =
+        message.role === "assistant" || message.role === "system"
+          ? renderMarkdownLite(message.text)
+          : escapeHtml(message.text);
+      el.innerHTML = body + (meta ? '<span class="meta">' + meta + "</span>" : "");
     }
 
     chatLog.appendChild(el);
