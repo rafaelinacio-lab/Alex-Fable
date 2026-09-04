@@ -222,8 +222,10 @@ const schemas = {
     select: z.array(z.string()).min(1),
     /** $expand extra (ex: "customFieldValues") além do que já é incluído. */
     extra_expand: z.string().optional(),
-    /** Máximo de páginas de 100 a varrer para buscar pessoas (padrão 200 = até 20 000). */
-    max_pages: z.number().int().positive().max(500).default(200),
+    /** Máximo de páginas de 100 por organização (padrão 50 = até 5 000 por org). */
+    max_pages: z.number().int().positive().max(500).default(50),
+    /** Se true, inclui 'isActive eq true' no filtro OData — retorna só contatos ativos. */
+    only_active: z.boolean().default(false),
   }),
   check_pending_customer_tickets: z.object({}),
   movidesk_get_service: z.object({ id: z.number().int().positive() }),
@@ -280,7 +282,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   movidesk_patch_ticket:
     "Atualiza um chamado Movidesk existente (status, campos, ações). Ao alterar status, inclua também justification.",
   movidesk_get_persons_in_organizations:
-    "Retorna todas as pessoas físicas (contatos, personType=1) vinculadas a um conjunto de organizações. Aceita org_ids (cod_ref direto), org_cnpjs (CNPJ — resolve via cpfCnpj da organização) e org_names (razão social — resolve via contains(businessName)). Pode receber qualquer combinação dos três: resolve cada um para um cod_ref de organização e depois busca todos os contatos vinculados. Use APÓS movidesk_search_persons_by_custom_field quando precisar das pessoas de organizações filtradas por campo adicional, ou diretamente quando já tiver IDs/CNPJs/nomes. Faz uma busca de todos os contatos + filtro local — não faz N chamadas individuais (evita esgotar o rate limit de 10 req/min).",
+    "Retorna todas as pessoas vinculadas a um conjunto de organizações usando o filtro OData confirmado 'relationships/any(r: r/id eq ORG_ID)' — uma query direcionada por organização, em paralelo. Aceita org_ids (cod_ref direto), org_cnpjs (CNPJ — resolve via cpfCnpj) e org_names (razão social — resolve via contains). Use only_active:true para restringir a isActive eq true. Use APÓS movidesk_search_persons_by_custom_field quando precisar das pessoas de organizações filtradas por campo adicional, ou diretamente quando já tiver IDs/CNPJs/nomes. NUNCA use movidesk_search_persons com organization/id no filter — esse caminho não é suportado pela API (HTTP 400 confirmado).",
   movidesk_get_person: "Busca uma pessoa Movidesk por cod_ref.",
   movidesk_search_persons:
     "Busca pessoas Movidesk via OData. $select é obrigatório. Passe expand:'customFieldValues' para trazer os campos adicionais de cada registro — necesário para ler campos como 'Vertical Viasoft', 'Departamento', etc.",
@@ -753,15 +755,17 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
         };
       }
 
-      // 2. Busca todas as pessoas físicas e filtra localmente por organization.id
+      // 2. Busca pessoas via relationships/any(r: r/id eq 'ORG_ID') — filtro confirmado
       const { persons, totalScanned, hitCap } = await getPersonsInOrganizations(
         resolvedIds,
         input.select as string[],
         input.extra_expand as string | undefined,
         input.max_pages as number,
+        input.only_active as boolean,
       );
 
       const MAX_INLINE = 200;
+      const activeNote = input.only_active ? " (filtro: isActive eq true)" : "";
       return {
         matched_count: persons.length,
         org_ids_resolved: [...resolvedIds],
@@ -771,9 +775,9 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
         persons: persons.slice(0, MAX_INLINE),
         persons_truncated: persons.length > MAX_INLINE,
         note:
-          `${resolvedIds.size} organização(ões) resolvida(s). ` +
-          `Varreu ${totalScanned} contatos${hitCap ? ` (limite de ${input.max_pages} páginas atingido — pode haver mais)` : " (varredura completa)"}. ` +
-          `${persons.length} contato(s) vinculado(s) encontrado(s).` +
+          `${resolvedIds.size} organização(ões) resolvida(s)${activeNote}. ` +
+          `${totalScanned} contato(s) retornado(s) pela API${hitCap ? ` (limite de ${input.max_pages} páginas por org atingido — pode haver mais)` : " (consulta completa)"}. ` +
+          `${persons.length} contato(s) únicos encontrado(s).` +
           (persons.length > MAX_INLINE ? ` Só as primeiras ${MAX_INLINE} pessoas aparecem inline.` : "") +
           (resolveErrors.length > 0 ? ` Erros de resolução: ${resolveErrors.join(" | ")}` : ""),
       };

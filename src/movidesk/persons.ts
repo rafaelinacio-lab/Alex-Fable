@@ -109,6 +109,7 @@ export async function getPersonsInOrganizations(
   select: string[],
   expand?: string,
   maxPages = 50,
+  onlyActive = false,
 ): Promise<{ persons: Person[]; totalScanned: number; hitCap: boolean }> {
   if (orgIds.size === 0) return { persons: [], totalScanned: 0, hitCap: false };
 
@@ -127,16 +128,14 @@ export async function getPersonsInOrganizations(
   for (let i = 0; i < orgIdArray.length; i += CONCURRENCY_LIMIT) {
     const batch = orgIdArray.slice(i, i + CONCURRENCY_LIMIT);
     const results = await Promise.all(
-      batch.map((orgId) =>
-        searchPersonsExhaustive(
-          {
-            filter: `relationships/any(r: r/id eq '${odataEscape(orgId)}')`,
-            select,
-            expand: safeExpand,
-          },
+      batch.map((orgId) => {
+        const baseFilter = `relationships/any(r: r/id eq '${odataEscape(orgId)}')`;
+        const filter = onlyActive ? `${baseFilter} and isActive eq true` : baseFilter;
+        return searchPersonsExhaustive(
+          { filter, select, expand: safeExpand },
           { maxPages },
-        ),
-      ),
+        );
+      }),
     );
 
     for (const { persons, hitCap } of results) {

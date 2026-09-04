@@ -314,6 +314,7 @@ const TOOL_PARAMETERS: Record<ToolName, Record<string, unknown>> = {
       select: { type: "array", items: { type: "string" } },
       extra_expand: { type: "string" },
       max_pages: { type: "integer" },
+      only_active: { type: "boolean" },
     },
     required: ["select"],
     additionalProperties: false,
