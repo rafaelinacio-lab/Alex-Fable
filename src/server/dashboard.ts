@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import { agentEventBus, type AgentEvent } from "../observability/eventBus.js";
 import type { MovideskAgentSession } from "../agent/orchestrator.js";
+import { transcribeAudio, textToSpeech, isGeminiConfigured } from "../voice/geminiVoice.js";
 import { DEFAULT_EXPORTS_DIR } from "../local/exportsDir.js";
 import {
   listFollowUpProfiles,
@@ -62,7 +63,7 @@ export interface ChatMessage {
   role: "user" | "assistant" | "error" | "file" | "system";
   text: string;
   timestamp: string;
-  source: "web" | "terminal" | "system";
+  source: "web" | "terminal" | "system" | "voice";
   /** Presente só quando role === "file" — ver AgentEvent "file_ready". */
   file?: { filename: string; downloadUrl: string; rowCount: number; format: "xlsx" | "pdf" };
 }
@@ -243,12 +244,13 @@ export function startDashboardServer(
     json(404, { error: "rota não encontrada" });
   }
 
-  // --- canal de eventos (aba "Atividade") ---
-  // noServer:true nas duas instâncias + roteamento manual pelo path abaixo, porque duas
-  // WebSocketServer com `{ server, path }` competindo pelo mesmo evento 'upgrade' do
-  // http.Server não roteiam de forma confiável (observado: handshake falhando com 400).
+  // --- canais WebSocket (Atividade, Conversa, Voz) ---
+  // noServer:true + roteamento manual pelo path, porque duas WebSocketServer com
+  // `{ server, path }` competindo pelo mesmo evento 'upgrade' não roteiam de forma
+  // confiável (handshake falhando com 400).
   const eventsWss = new WebSocketServer({ noServer: true });
   const chatWss = new WebSocketServer({ noServer: true });
+  const voiceWss = new WebSocketServer({ noServer: true });
 
   server.on("upgrade", (req, socket, head) => {
     const pathname = req.url ? new URL(req.url, "http://localhost").pathname : "";
@@ -256,6 +258,8 @@ export function startDashboardServer(
       eventsWss.handleUpgrade(req, socket, head, (ws) => eventsWss.emit("connection", ws, req));
     } else if (pathname === "/chat") {
       chatWss.handleUpgrade(req, socket, head, (ws) => chatWss.emit("connection", ws, req));
+    } else if (pathname === "/voice") {
+      voiceWss.handleUpgrade(req, socket, head, (ws) => voiceWss.emit("connection", ws, req));
     } else {
       socket.destroy();
     }
@@ -351,14 +355,80 @@ export function startDashboardServer(
     socket.on("close", () => chatClients.delete(socket));
   });
 
+  // --- canal de voz (aba "Voz") ---
+  // Protocolo:
+  //   Cliente → Servidor : { type:"audio_data", data:"<base64>", mimeType:"audio/ogg" }
+  //   Servidor → Cliente : { type:"status", state:"transcribing"|"thinking"|"speaking"|"idle"|"error" }
+  //                        { type:"transcript", text:"..." }
+  //                        { type:"response_text", text:"..." }
+  //                        { type:"response_audio", data:"<base64 WAV>", mimeType:"audio/wav" }
+  //                        { type:"config", geminiAvailable:bool }
+  voiceWss.on("connection", (socket: WebSocket) => {
+    function vsend(payload: object): void {
+      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
+    }
+
+    // Informa ao cliente se o Gemini está configurado
+    vsend({ type: "config", geminiAvailable: isGeminiConfigured() });
+
+    socket.on("message", (raw) => {
+      let parsed: { type?: unknown; data?: unknown; mimeType?: unknown };
+      try {
+        parsed = JSON.parse(raw.toString()) as typeof parsed;
+      } catch {
+        return;
+      }
+
+      if (parsed.type === "audio_data" && typeof parsed.data === "string") {
+        const audioBase64 = parsed.data;
+        const mimeType = typeof parsed.mimeType === "string" ? parsed.mimeType : "audio/ogg";
+
+        // Pipeline assíncrono: STT → Orquestrador → TTS
+        (async () => {
+          try {
+            // 1. Transcrever
+            vsend({ type: "status", state: "transcribing" });
+            const transcript = await transcribeAudio(audioBase64, mimeType);
+
+            if (!transcript) {
+              vsend({ type: "status", state: "error", message: "Não consegui entender o áudio. Tente falar mais perto do microfone." });
+              vsend({ type: "status", state: "idle" });
+              return;
+            }
+            vsend({ type: "transcript", text: transcript });
+
+            // 2. Processar com o orquestrador (mesma sessão do chat/terminal)
+            vsend({ type: "status", state: "thinking" });
+            const reply = await sendChatMessage(transcript, "voice");
+            vsend({ type: "response_text", text: reply });
+
+            // 3. TTS
+            vsend({ type: "status", state: "speaking" });
+            const wavBuffer = await textToSpeech(reply);
+            vsend({ type: "response_audio", data: wavBuffer.toString("base64"), mimeType: "audio/wav" });
+
+            vsend({ type: "status", state: "idle" });
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error("[voice] Erro no pipeline de voz:", message);
+            vsend({ type: "status", state: "error", message });
+            vsend({ type: "status", state: "idle" });
+          }
+        })();
+      }
+    });
+  });
+
   server.listen(port);
 
   async function close(): Promise<void> {
     agentEventBus.off("event", onFileReady);
     for (const client of chatClients) client.terminate();
     eventsWss.clients.forEach((client) => client.terminate());
+    voiceWss.clients.forEach((client) => client.terminate());
     await new Promise<void>((resolve) => eventsWss.close(() => resolve()));
     await new Promise<void>((resolve) => chatWss.close(() => resolve()));
+    await new Promise<void>((resolve) => voiceWss.close(() => resolve()));
     await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
   }
 

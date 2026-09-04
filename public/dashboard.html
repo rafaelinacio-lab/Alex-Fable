@@ -381,6 +381,62 @@
   table.run-table tr:last-child td { border-bottom: none; }
   table.run-table td.subject { white-space: normal; max-width: 360px; }
   .form-error { color: var(--err); font-size: 12px; margin-top: 8px; }
+
+  /* --- aba "Voz" --- */
+  #voiceView { padding: 4px 4px 24px; }
+  #voiceView.active { display: flex; flex-direction: column; }
+  .voice-banner {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--panel); border: 1px solid var(--panel-border);
+    border-radius: 10px; padding: 12px 16px; margin-bottom: 20px; font-size: 13px;
+  }
+  .voice-banner.ok { border-color: var(--ok); color: var(--ok); }
+  .voice-banner.warn { border-color: var(--pending); color: var(--pending); }
+  .voice-center {
+    display: flex; flex-direction: column; align-items: center;
+    gap: 20px; padding: 32px 0 28px;
+  }
+  .mic-btn {
+    width: 88px; height: 88px;
+    border-radius: 50%; border: none;
+    background: var(--accent); color: #fff;
+    font-size: 36px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.2s, box-shadow 0.2s;
+    box-shadow: 0 0 0 0 rgba(79, 157, 255, 0.4);
+  }
+  .mic-btn:hover:not(:disabled) { filter: brightness(1.1); }
+  .mic-btn.recording {
+    background: var(--err);
+    animation: mic-pulse 1.4s ease-in-out infinite;
+  }
+  .mic-btn.processing {
+    background: var(--pending);
+    cursor: default;
+  }
+  .mic-btn:disabled { opacity: 0.35; cursor: default; animation: none; }
+  @keyframes mic-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(248, 81, 73, 0.5); }
+    50%       { box-shadow: 0 0 0 18px rgba(248, 81, 73, 0); }
+  }
+  .voice-state {
+    font-size: 13px; color: var(--muted); text-align: center;
+    min-height: 20px; transition: color 0.2s;
+  }
+  .voice-state.active { color: var(--accent); }
+  .voice-state.recording { color: var(--err); font-weight: 600; }
+  .voice-state.processing { color: var(--pending); }
+  #voiceLog {
+    display: flex; flex-direction: column; gap: 10px;
+    max-width: 800px; width: 100%; margin: 0 auto;
+    max-height: calc(100vh - 340px); overflow-y: auto;
+    padding-bottom: 8px;
+  }
+  .voice-pair { display: contents; }
+  .voice-label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--muted); padding: 0 4px; margin-top: 4px;
+  }
 </style>
 </head>
 <body>
@@ -395,6 +451,7 @@
 <div class="tabs">
   <button data-tab="activity" class="active">Atividade</button>
   <button data-tab="chat">Conversa</button>
+  <button data-tab="voice">🎙️ Voz</button>
   <button data-tab="automation">Automação</button>
   <button data-tab="charges">Cobranças</button>
 </div>
@@ -424,6 +481,19 @@
     <textarea id="chatInput" rows="1" placeholder="Digite sua mensagem para o agente…"></textarea>
     <button id="chatSend" type="submit">Enviar</button>
   </form>
+</div>
+
+<div id="voiceView" class="view">
+  <div id="voiceBanner" class="voice-banner warn" style="display:none">
+    ⚠️ GEMINI_API_KEY não configurada — a aba de voz está desabilitada. Defina a variável no .env e reinicie.
+  </div>
+  <div id="voiceInterface">
+    <div class="voice-center">
+      <button id="micBtn" class="mic-btn" title="Clique para falar" disabled>🎙️</button>
+      <div id="voiceState" class="voice-state">Aguardando conexão…</div>
+    </div>
+    <div id="voiceLog"></div>
+  </div>
 </div>
 
 <div id="automationView" class="view">
@@ -741,6 +811,8 @@
         loadFollowUpProfiles();
       } else if (btn.dataset.tab === "charges") {
         loadCharges();
+      } else if (btn.dataset.tab === "voice") {
+        voiceLog && (voiceLog.scrollTop = voiceLog.scrollHeight);
       }
     });
   });
@@ -1256,6 +1328,218 @@
       chargesList.appendChild(card);
     }
   }
+
+  refreshChargesBtn.addEventListener("click", loadCharges);
+
+  // ---------------------------------------------------------------------------
+  // --- aba "Voz" (Gemini STT + Orquestrador + Gemini TTS) ---
+  // ---------------------------------------------------------------------------
+  const micBtn        = document.getElementById("micBtn");
+  const voiceStateEl  = document.getElementById("voiceState");
+  const voiceLog      = document.getElementById("voiceLog");
+  const voiceBanner   = document.getElementById("voiceBanner");
+
+  let voiceWs         = null;   // WebSocket /voice
+  let mediaRecorder   = null;   // MediaRecorder ativo
+  let audioChunks     = [];     // chunks acumulados durante a gravação
+  let isRecording     = false;
+  let voiceBusy       = false;  // aguardando resposta do servidor
+  let preferredMime   = "audio/webm;codecs=opus"; // reavaliado no início
+
+  function setVoiceState(text, cls) {
+    voiceStateEl.textContent = text;
+    voiceStateEl.className = "voice-state" + (cls ? " " + cls : "");
+  }
+
+  function addVoiceLog(role, text) {
+    // Reutiliza os mesmos estilos de "bubble" da aba Conversa
+    const el = document.createElement("div");
+    el.className = "bubble " + (role === "user" ? "user" : "assistant");
+    el.innerHTML = (role === "user" ? "" : renderMarkdownLite(text) ? renderMarkdownLite(text) : escapeHtml(text));
+    if (role === "user") el.textContent = text;
+    const label = document.createElement("span");
+    label.className = "meta";
+    label.textContent = role === "user" ? "você falou" : "agente respondeu";
+    el.appendChild(label);
+    voiceLog.appendChild(el);
+    voiceLog.scrollTop = voiceLog.scrollHeight;
+  }
+
+  function updateMicBtn() {
+    if (voiceBusy) {
+      micBtn.disabled = true;
+      micBtn.className = "mic-btn processing";
+      micBtn.title = "Processando…";
+      return;
+    }
+    if (isRecording) {
+      micBtn.disabled = false;
+      micBtn.className = "mic-btn recording";
+      micBtn.title = "Parar gravação";
+    } else {
+      micBtn.disabled = !voiceWs || voiceWs.readyState !== WebSocket.OPEN;
+      micBtn.className = "mic-btn";
+      micBtn.title = "Clique para falar";
+    }
+  }
+
+  async function startRecording() {
+    if (isRecording || voiceBusy) return;
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    } catch {
+      setVoiceState("❌ Permissão de microfone negada.", "");
+      return;
+    }
+
+    // Escolhe o melhor MIME suportado pelo browser
+    const candidates = ["audio/ogg;codecs=opus", "audio/webm;codecs=opus", "audio/webm"];
+    preferredMime = candidates.find((m) => MediaRecorder.isTypeSupported(m)) || "audio/webm";
+
+    audioChunks = [];
+    mediaRecorder = new MediaRecorder(stream, { mimeType: preferredMime });
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) audioChunks.push(e.data);
+    };
+    mediaRecorder.start(200); // coleta a cada 200 ms
+    isRecording = true;
+    updateMicBtn();
+    setVoiceState("🔴 Gravando… clique novamente para enviar.", "recording");
+  }
+
+  function stopRecordingAndSend() {
+    if (!mediaRecorder || !isRecording) return;
+    isRecording = false;
+    voiceBusy = true;
+    updateMicBtn();
+    setVoiceState("Enviando áudio…", "processing");
+
+    mediaRecorder.stop();
+    mediaRecorder.onstop = () => {
+      const baseMime = preferredMime.split(";")[0]; // strip codec param
+      const blob = new Blob(audioChunks, { type: baseMime });
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        // reader.result = "data:<mime>;base64,<dados>"
+        const base64 = String(reader.result).split(",")[1];
+        if (voiceWs && voiceWs.readyState === WebSocket.OPEN) {
+          voiceWs.send(JSON.stringify({ type: "audio_data", data: base64, mimeType: baseMime }));
+        } else {
+          setVoiceState("❌ Conexão perdida. Aguardando reconexão…", "");
+          voiceBusy = false;
+          updateMicBtn();
+        }
+      };
+      reader.readAsDataURL(blob);
+      // Libera o microfone imediatamente
+      mediaRecorder.stream.getTracks().forEach((t) => t.stop());
+      mediaRecorder = null;
+    };
+  }
+
+  micBtn.addEventListener("click", () => {
+    if (isRecording) {
+      stopRecordingAndSend();
+    } else if (!voiceBusy) {
+      startRecording();
+    }
+  });
+
+  // Tecla de atalho: Espaço (quando a aba Voz estiver ativa) para gravar/parar
+  document.addEventListener("keydown", (e) => {
+    const voiceTabActive = document.getElementById("voiceView").classList.contains("active");
+    if (!voiceTabActive) return;
+    if (e.code === "Space" && e.target === document.body) {
+      e.preventDefault();
+      micBtn.click();
+    }
+  });
+
+  let voiceAudio = null; // <audio> atual reproduzindo TTS
+
+  function connectVoice() {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    voiceWs = new WebSocket(proto + "//" + location.host + "/voice");
+
+    voiceWs.onopen = () => {
+      // o servidor envia { type:"config" } imediatamente após conectar
+    };
+    voiceWs.onclose = () => {
+      micBtn.disabled = true;
+      setVoiceState("Desconectado — reconectando…", "");
+      voiceBusy = false;
+      isRecording = false;
+      updateMicBtn();
+      setTimeout(connectVoice, 2500);
+    };
+    voiceWs.onerror = () => voiceWs.close();
+
+    voiceWs.onmessage = (msg) => {
+      const data = JSON.parse(msg.data);
+
+      if (data.type === "config") {
+        if (data.geminiAvailable) {
+          voiceBanner.style.display = "none";
+          setVoiceState("Pronto — clique no microfone para falar. (Espaço = atalho)", "");
+          updateMicBtn();
+        } else {
+          voiceBanner.style.display = "flex";
+          micBtn.disabled = true;
+          setVoiceState("Gemini não configurado.", "");
+        }
+        return;
+      }
+
+      if (data.type === "status") {
+        const states = {
+          transcribing: { text: "Transcrevendo áudio…", cls: "processing" },
+          thinking:     { text: "Agente processando…",  cls: "processing" },
+          speaking:     { text: "Gerando resposta em áudio…", cls: "processing" },
+          idle:         { text: "Pronto — clique no microfone para falar.", cls: "" },
+          error:        { text: "❌ " + (data.message || "Erro desconhecido."), cls: "" },
+        };
+        const s = states[data.state] || { text: data.state, cls: "" };
+        setVoiceState(s.text, s.cls);
+        if (data.state === "idle" || data.state === "error") {
+          voiceBusy = false;
+          updateMicBtn();
+        }
+        return;
+      }
+
+      if (data.type === "transcript") {
+        addVoiceLog("user", data.text);
+        return;
+      }
+
+      if (data.type === "response_text") {
+        addVoiceLog("assistant", data.text);
+        return;
+      }
+
+      if (data.type === "response_audio" && data.data) {
+        // Converte base64 WAV → Blob → URL → reproduz
+        const bytes = Uint8Array.from(atob(data.data), (c) => c.charCodeAt(0));
+        const blob  = new Blob([bytes], { type: data.mimeType || "audio/wav" });
+        const url   = URL.createObjectURL(blob);
+        if (voiceAudio) { voiceAudio.pause(); URL.revokeObjectURL(voiceAudio.src); }
+        voiceAudio = new Audio(url);
+        voiceAudio.onended = () => URL.revokeObjectURL(url);
+        voiceAudio.play().catch(() => {});
+        return;
+      }
+    };
+  }
+
+  // Conecta o WebSocket de voz apenas quando a aba for aberta pela primeira vez
+  let voiceConnected = false;
+  document.querySelector('[data-tab="voice"]').addEventListener("click", () => {
+    if (!voiceConnected) {
+      voiceConnected = true;
+      connectVoice();
+    }
+  });
 
   refreshChargesBtn.addEventListener("click", loadCharges);
 })();
