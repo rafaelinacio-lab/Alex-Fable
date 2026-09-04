@@ -100,9 +100,8 @@ const schemas = {
   movidesk_search_tickets_exhaustive: z.object({
     filter: z.string(),
     select: z.array(z.string()).min(1),
-    source: z.enum(["current", "past"]).default("current"),
-    page_size: z.number().int().positive().max(100).default(100),
-    max_pages: z.number().int().positive().max(150).default(50),
+    page_size: z.number().int().positive().max(1000).default(1000),
+    max_pages: z.number().int().positive().max(200).default(100),
     only_open: z.boolean().default(false),
   }),
   export_tickets_to_excel: z.object({
@@ -113,9 +112,8 @@ const schemas = {
   export_tickets_search_to_excel: z.object({
     filter: z.string(),
     select: z.array(z.string()).min(1),
-    source: z.enum(["current", "past"]).default("current"),
-    page_size: z.number().int().positive().max(100).default(100),
-    max_pages: z.number().int().positive().max(150).default(50),
+    page_size: z.number().int().positive().max(1000).default(1000),
+    max_pages: z.number().int().positive().max(200).default(100),
     only_open: z.boolean().default(false),
     columns: z.array(z.object({ header: z.string(), key: z.string() })).optional(),
     filename_hint: z.string().min(1),
@@ -129,9 +127,8 @@ const schemas = {
   export_tickets_search_to_pdf: z.object({
     filter: z.string(),
     select: z.array(z.string()).min(1),
-    source: z.enum(["current", "past"]).default("current"),
-    page_size: z.number().int().positive().max(100).default(100),
-    max_pages: z.number().int().positive().max(150).default(50),
+    page_size: z.number().int().positive().max(1000).default(1000),
+    max_pages: z.number().int().positive().max(200).default(100),
     only_open: z.boolean().default(false),
     columns: z.array(z.object({ header: z.string(), key: z.string(), width: z.number().positive().optional() })).optional(),
     filename_hint: z.string().min(1),
@@ -194,7 +191,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   movidesk_search_tickets_past:
     "Como movidesk_search_tickets, mas na rota /tickets/past (chamados com lastUpdate há mais de 90 dias). Sintaxe assumida por analogia — não 100% confirmada; se o retorno vier estranho, trate como comportamento não documentado.",
   movidesk_search_tickets_exhaustive:
-    "Pagina AUTOMATICAMENTE até o fim real dos resultados (ou até um limite de segurança) e devolve o total. Use quando o usuário pedir 'todos os chamados' ou uma contagem/quantidade exata SEM pedir exportação — nunca monte esse total manualmente somando chamadas separadas de movidesk_search_tickets. Se o pedido também envolver Excel/planilha, use export_tickets_search_to_excel diretamente em vez desta (evita ter que retransmitir os registros de volta para você). O retorno inclui hitCap/pagesFetched: se hitCap=true, o total pode ser maior que o array devolvido — reporte isso honestamente ao usuário (a API do Movidesk não suporta $count, então não há como saber o total exato além de paginar até o fim). Para 'chamados em aberto', use only_open:true (NÃO tente montar isso no seu próprio filter com ne/not — não são operadores confirmados nesta API, e já causou um bug real: chamados 'Resolvido' aparecendo num pedido de 'em aberto'). only_open filtra baseStatus no servidor, depois de buscar, usando o enum confirmado (New/InAttendance/Stopped = aberto; Resolved/Canceled/Closed = não).",
+    "Busca exaustiva padrão — percorre AUTOMATICAMENTE as duas rotas da API em sequência (Fase 1: /tickets → Fase 2: /tickets/past) até o fim real dos resultados em cada uma, exatamente como o fluxo n8n de referência. Use SEMPRE que precisar de total real ou de 'todos os chamados' — nunca soma manualmente chamadas separadas de movidesk_search_tickets. NÃO há parâmetro 'source': as duas fases são sempre percorridas; omitir uma significaria perder chamados silenciosamente (recentes ficam só em /tickets, antigos só em /tickets/past). O retorno inclui phasesCompleted (quais fases terminaram normalmente) e hitCap (true = limite de segurança atingido, total pode ser maior — reporte isso ao usuário). Para exportação em Excel/PDF, use export_tickets_search_to_excel / export_tickets_search_to_pdf diretamente. Para 'chamados em aberto', use only_open:true — NÃO filtre status via OData ne/not (operadores não confirmados nesta API, já causaram bug real: Resolvidos aparecendo como Abertos).",
   export_tickets_to_excel:
     "Grava um .xlsx a partir de linhas que VOCÊ já tem em mãos (até 200 linhas — ex: um resultado pequeno que você já resumiu na conversa). NUNCA use isto para exportar o resultado de uma busca grande: você teria que retransmitir cada registro como texto na chamada de ferramenta, e isso trunca silenciosamente antes de completar (é exatamente o bug já visto: só saíam 20-500 de 643 linhas). Para exportar o resultado de uma busca — que é o caso mais comum — use export_tickets_search_to_excel, que busca e grava o arquivo inteiro no servidor, sem os dados passarem por você.",
   export_tickets_search_to_excel:
@@ -359,7 +356,7 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
     case "movidesk_search_tickets_exhaustive": {
       const result = await searchTicketsExhaustive(
         { filter: input.filter, select: input.select },
-        { pageSize: input.page_size, maxPages: input.max_pages, source: input.source, onlyOpen: input.only_open },
+        { pageSize: input.page_size, maxPages: input.max_pages, onlyOpen: input.only_open },
       );
       // Só devolve uma amostra inline para o modelo comentar/resumir — devolver os
       // milhares de registros completos de volta ao contexto do modelo é desperdício
@@ -367,18 +364,22 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
       // não passa pelos tokens do modelo).
       const MAX_INLINE_TICKETS = 50;
       const truncatedForDisplay = result.tickets.length > MAX_INLINE_TICKETS;
+      const phasesMsg = `Fases percorridas: ${result.phasesCompleted.join(" + ") || "nenhuma concluída (limite atingido antes)"}.`;
       return {
         tickets: result.tickets.slice(0, MAX_INLINE_TICKETS),
         tickets_truncated_for_display: truncatedForDisplay,
         total_found: result.tickets.length,
         pages_fetched: result.pagesFetched,
+        phases_completed: result.phasesCompleted,
         exact_total: !result.hitCap,
         note:
+          phasesMsg +
+          " " +
           (result.hitCap
-            ? `Atingiu o limite de segurança de ${input.max_pages} páginas (${input.page_size} por página) — pode haver mais registros além destes ${result.tickets.length}. A API do Movidesk não suporta $count. Se precisar do total real, chame esta mesma ferramenta DE NOVO com max_pages maior (até 150) em vez de paginar manualmente com movidesk_search_tickets — isso é uma única chamada de ferramenta, não uma série de confirmações com o usuário.`
-            : `Total exato: a última página retornou menos que ${input.page_size} registros, confirmando que não há mais resultados.`) +
+            ? `Atingiu o limite de segurança de ${input.max_pages} páginas (${input.page_size} por página) — pode haver mais registros. A API do Movidesk não suporta $count. Se precisar do total real, chame novamente com max_pages maior (até 200).`
+            : `Total exato: ambas as fases (current + past) terminaram naturalmente — não há mais resultados.`) +
           (truncatedForDisplay
-            ? ` Só as primeiras ${MAX_INLINE_TICKETS} linhas vieram no campo "tickets" (para você comentar/resumir) — o total_found (${result.tickets.length}) já é a contagem real de todos. Para gerar um arquivo com TODOS, use export_tickets_search_to_excel com o mesmo filter/select em vez de tentar retransmitir estes registros.`
+            ? ` Só as primeiras ${MAX_INLINE_TICKETS} linhas vieram no campo "tickets" — o total_found (${result.tickets.length}) já é a contagem real. Para um arquivo com TODOS, use export_tickets_search_to_excel com o mesmo filter/select.`
             : "") +
           (input.only_open && result.fetchedBeforeOpenFilter !== undefined
             ? ` Filtro only_open aplicado: de ${result.fetchedBeforeOpenFilter} chamados retornados pela busca, ${result.tickets.length} estão em aberto (baseStatus New/InAttendance/Stopped).`
@@ -396,7 +397,7 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
     case "export_tickets_search_to_excel": {
       const result = await searchTicketsExhaustive(
         { filter: input.filter, select: input.select },
-        { pageSize: input.page_size, maxPages: input.max_pages, source: input.source, onlyOpen: input.only_open },
+        { pageSize: input.page_size, maxPages: input.max_pages, onlyOpen: input.only_open },
       );
       if (result.tickets.length === 0) {
         return {
@@ -435,7 +436,7 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
     case "export_tickets_search_to_pdf": {
       const result = await searchTicketsExhaustive(
         { filter: input.filter, select: input.select },
-        { pageSize: input.page_size, maxPages: input.max_pages, source: input.source, onlyOpen: input.only_open },
+        { pageSize: input.page_size, maxPages: input.max_pages, onlyOpen: input.only_open },
       );
       if (result.tickets.length === 0) {
         return {

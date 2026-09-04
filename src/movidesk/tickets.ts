@@ -192,61 +192,89 @@ export interface ExhaustiveSearchResult {
   hitCap: boolean;
   /** Quantos registros vieram da API antes do filtro local de onlyOpen (se usado). */
   fetchedBeforeOpenFilter?: number;
+  /** Fases percorridas na paginação dual. */
+  phasesCompleted: Array<"current" | "past">;
 }
 
-const DEFAULT_PAGE_SIZE = 100;
-const DEFAULT_MAX_PAGES = 50;
+const DEFAULT_PAGE_SIZE = 1000;
+const DEFAULT_MAX_PAGES = 100;
 
 /**
- * Percorre TODAS as páginas de uma busca (via `$skip`) até a API devolver uma página
- * menor que o tamanho pedido (fim real dos resultados) ou até atingir `maxPages` (limite
- * de segurança, evita loop descontrolado / estourar o rate limit). A API do Movidesk não
- * suporta `$count` (seção 6 da doc) — esta é a única forma de saber um total exato.
+ * Busca exaustiva padrão — percorre AMBAS as rotas da API em sequência, exatamente
+ * como o fluxo n8n de referência (Abertos / Fechados no Movidesk):
  *
- * Isto é uma sequência de GETs — não precisa de confirmação do usuário nem de pausas
- * entre páginas (seção 3 do prompt de sistema: consultas GET podem ser executadas sem
- * nova confirmação). O tempo total é limitado pelo rate limit (10 req/min por padrão):
- * `maxPages=50` com `pageSize=100` pode levar até ~5 minutos para 5.000 registros — isso
- * é esperado, não é motivo para parar e perguntar se deve continuar.
+ *   Fase 1 → /tickets       (chamados com lastUpdate nos últimos 90 dias)
+ *   Fase 2 → /tickets/past  (chamados mais antigos, mesmo filtro OData)
  *
- * `hitCap: true` no retorno significa que o total pode ser MAIOR do que o array
- * devolvido — nunca reporte esse número como "total" sem deixar isso claro.
+ * Cada fase pagina via $skip até a API retornar uma página menor que `pageSize`
+ * (sinal de fim real). O limite `maxPages` é de segurança global (soma das duas fases)
+ * para evitar loop descontrolado em caso de bug no filtro.
  *
- * `onlyOpen`: filtra "chamados em aberto" (não resolvido/cancelado/fechado) DEPOIS de
- * buscar, comparando `baseStatus` no código — não via `$filter` OData. Isso é
- * deliberado: os operadores `ne`/`or`/`not` não são confirmados nesta API (só `eq`,
- * `and`, `gt`, `ge`, `le`, `contains`, `any` aparecem nos exemplos documentados), então
- * montar um filtro de exclusão de status arriscaria sintaxe inventada ou, pior, um
- * filtro que "funciona" mas silenciosamente inclui status errados (já aconteceu:
- * pediram "em aberto" e vieram chamados "Resolvido"). Filtrar `baseStatus` no código,
- * com o enum confirmado (`OPEN_BASE_STATUSES`), é a forma robusta.
+ * Por que duas fases?
+ *   O Movidesk divide o acervo histórico em duas rotas sem aviso explícito. Uma busca
+ *   que só use /tickets perde silenciosamente todos os chamados mais antigos; uma busca
+ *   que só use /tickets/past perde os recentes. A única forma de garantir cobertura
+ *   total é passar pelas duas.
+ *
+ * Por que pageSize=1000?
+ *   O n8n de referência usa $top=1000 — o maior lote confirmado pela API. Menos
+ *   requisições significam menos consumo do rate limit (10 req/min).
+ *
+ * `hitCap: true` → total pode ser MAIOR que o array devolvido; nunca reporte como exato.
+ *
+ * `onlyOpen`: filtra "chamados em aberto" (baseStatus ∈ New/InAttendance/Stopped) APÓS
+ *   buscar, no código — não via $filter OData. Os operadores ne/or/not não estão
+ *   confirmados nesta API, então montá-los arriscaria falsos positivos silenciosos.
  */
 export async function searchTicketsExhaustive(
   base: Pick<ODataQuery, "filter" | "select" | "expand">,
-  opts?: { pageSize?: number; maxPages?: number; source?: "current" | "past"; onlyOpen?: boolean },
+  opts?: { pageSize?: number; maxPages?: number; onlyOpen?: boolean },
 ): Promise<ExhaustiveSearchResult> {
   if (!base.select?.length) {
     throw new Error("searchTicketsExhaustive exige select — nunca liste tickets sem restringir os campos retornados.");
   }
+
   const pageSize = opts?.pageSize ?? DEFAULT_PAGE_SIZE;
   const maxPages = opts?.maxPages ?? DEFAULT_MAX_PAGES;
-  const fetchPage = opts?.source === "past" ? searchTicketsPast : searchTickets;
-  // orderby por id garante que $skip não pule/repita registros entre páginas.
+  // orderby por id garante estabilidade da paginação — $skip não pula/repete registros.
   const orderby = "id asc";
-  // Garante que baseStatus venha na resposta quando for filtrar por ele — sem isso o
-  // filtro local não teria como funcionar.
+  // Garante que baseStatus esteja presente quando for filtrar por ele localmente.
   const select =
     opts?.onlyOpen && !base.select.includes("baseStatus") ? [...base.select, "baseStatus"] : base.select;
 
   const all: TicketSummary[] = [];
-  for (let page = 0; page < maxPages; page++) {
-    const pageResults = await fetchPage({ ...base, select, orderby, top: pageSize, skip: page * pageSize });
-    all.push(...pageResults);
-    if (pageResults.length < pageSize) {
-      return finishExhaustive(all, page + 1, false, opts?.onlyOpen);
+  let totalPages = 0;
+  const phasesCompleted: Array<"current" | "past"> = [];
+
+  // Fase 1 — /tickets (recentes)
+  for (let skip = 0; ; skip += pageSize) {
+    if (totalPages >= maxPages) {
+      return finishExhaustive(all, totalPages, true, opts?.onlyOpen, phasesCompleted);
+    }
+    const page = await searchTickets({ ...base, select, orderby, top: pageSize, skip });
+    totalPages++;
+    all.push(...page);
+    if (page.length < pageSize) {
+      phasesCompleted.push("current");
+      break;
     }
   }
-  return finishExhaustive(all, maxPages, true, opts?.onlyOpen);
+
+  // Fase 2 — /tickets/past (histórico > 90 dias)
+  for (let skip = 0; ; skip += pageSize) {
+    if (totalPages >= maxPages) {
+      return finishExhaustive(all, totalPages, true, opts?.onlyOpen, phasesCompleted);
+    }
+    const page = await searchTicketsPast({ ...base, select, orderby, top: pageSize, skip });
+    totalPages++;
+    all.push(...page);
+    if (page.length < pageSize) {
+      phasesCompleted.push("past");
+      break;
+    }
+  }
+
+  return finishExhaustive(all, totalPages, false, opts?.onlyOpen, phasesCompleted);
 }
 
 function finishExhaustive(
@@ -254,12 +282,13 @@ function finishExhaustive(
   pagesFetched: number,
   hitCap: boolean,
   onlyOpen: boolean | undefined,
+  phasesCompleted: Array<"current" | "past">,
 ): ExhaustiveSearchResult {
   if (!onlyOpen) {
-    return { tickets: all, pagesFetched, hitCap };
+    return { tickets: all, pagesFetched, hitCap, phasesCompleted };
   }
   const filtered = all.filter((t) => typeof t.baseStatus === "string" && OPEN_BASE_STATUSES.includes(t.baseStatus));
-  return { tickets: filtered, pagesFetched, hitCap, fetchedBeforeOpenFilter: all.length };
+  return { tickets: filtered, pagesFetched, hitCap, phasesCompleted, fetchedBeforeOpenFilter: all.length };
 }
 
 export async function createTicket(
