@@ -193,7 +193,9 @@ Boas práticas:
 | `owner` | Ticket | Responsável atual do chamado (objeto singular) | `"owner"` |
 | `clients` | Ticket | Clientes/solicitantes vinculados ao chamado (coleção) | `"clients"` |
 | `actions` | Ticket | Histórico de ações/interações | `"actions"` |
-| `organization` | Person | Organização à qual o contato pertence | `"organization"` |
+| `organization` | Person | Organização mãe (campo singular) | `"organization"` |
+| `relationships` | Person | Vínculos com organizações — **confirmado**; use para filtrar (`relationships/any(r: r/id eq 'ID')`) e para exibir os vínculos | `"relationships"` |
+| `emails` | Person | Lista de e-mails — **confirmado**; sem expand, emails não aparece | `"emails"` |
 | `customFieldValues` | Ticket e Person | Campos adicionais preenchidos | `"customFieldValues"` |
 
 Para múltiplos campos, separe por vírgula: `expand: "owner,clients"`. Sem o `$expand`, esses campos chegam `null` ou ausentes — **não interprete ausência como "campo não preenchido"**; é sempre falta do `$expand`.
@@ -208,8 +210,16 @@ Para múltiplos campos, separe por vírgula: `expand: "owner,clients"`. Sem o `$
 - Neste ambiente, a tabela local `movidesk_contatos` é a fonte preferencial para resolver e-mail → `cod_ref`.
 
 **Campos de navegação OData em Pessoas exigem `$expand`** — da mesma forma que `owner`/`clients` em tickets, os seguintes campos em `/persons` NÃO aparecem via `$select` puro; é preciso incluí-los em `expand`:
-- `organization` — a organização (empresa mãe) à qual a pessoa está vinculada; inclua sempre que precisar filtrar ou exibir a org de um contato.
+- `relationships` — vínculos da pessoa com organizações (confirmado via API real). Inclua sempre que precisar ver ou filtrar pela organização vinculada. É também o campo usado para filtrar: `relationships/any(r: r/id eq 'ORG_ID')`.
+- `emails` — lista de e-mails da pessoa (coleção, exige `$expand=emails`).
 - `customFieldValues` — campos adicionais (ex: "Vertical Viasoft:", "Departamento") — sem este `$expand` o array virá vazio ou ausente, mesmo listado em `select`.
+
+**Filtro OData confirmado para buscar pessoas por organização:**
+```
+$filter=relationships/any(r: r/id eq 'COD_REF_DA_ORG')
+$expand=emails,relationships
+```
+Este filtro é confirmado pela API real do Movidesk (tenant Viasoft). Substitui a abordagem de varrer todos os contatos e filtrar localmente. A ferramenta `movidesk_get_persons_in_organizations` já usa este padrão internamente — cada organização gera uma query direcionada, executadas em paralelo em lotes de 5.
 
 **Quando usar cada ferramenta de busca de pessoas — árvore de decisão:**
 
@@ -217,8 +227,9 @@ Para múltiplos campos, separe por vírgula: `expand: "owner,clients"`. Sem o `$
 |---|---|
 | Preciso de 1 pessoa cujo cod_ref já conheço | `movidesk_get_person(id)` |
 | Preciso de até ~100 registros com filtro OData simples (sem campo adicional) | `movidesk_search_persons(filter, select, expand?)` |
+| Quero todos os contatos de UMA organização específica cujo ID conheço | `movidesk_search_persons(filter="relationships/any(r: r/id eq 'ID')", expand="emails,relationships")` |
 | Preciso encontrar orgs/pessoas cujo campo adicional X tem valor Y | `movidesk_search_persons_by_custom_field` |
-| Já tenho IDs / CNPJs / nomes de orgs e quero os contatos delas | `movidesk_get_persons_in_organizations` |
+| Já tenho IDs / CNPJs / nomes de orgs e quero os contatos delas | `movidesk_get_persons_in_organizations` — usa `relationships/any()` internamente por organização, em paralelo |
 | Tenho uma lista de CNPJs e quero as orgs ou contatos | `movidesk_get_persons_in_organizations(org_cnpjs=[...])` — **NUNCA use list_customer_organizations nem movidesk_search_organizations para CNPJ** |
 | Quero orgs da lista local já sincronizada (fluxos Voors/GCC) — busca por **nome** | `list_customer_organizations` |
 | Quero buscar org por **nome/razão social** direto na API real | `movidesk_search_organizations` |

@@ -86,41 +86,74 @@ export async function searchPersonsExhaustive(
 }
 
 /**
- * Busca todas as pessoas físicas (personType=1) vinculadas a um conjunto de organizações.
+ * Busca todas as pessoas vinculadas a um conjunto de organizações.
  *
- * Estratégia: em vez de N chamadas (uma por org), busca TODOS os contatos e filtra
- * localmente pelo organization.id — mais eficiente contra o rate limit de 10 req/min.
+ * Estratégia (confirmada via curl): usa o filtro OData
+ *   `relationships/any(r: r/id eq 'ORG_ID')`
+ * que é suportado pela API de /persons do Movidesk. Executa uma query direcionada
+ * por organização, em lotes paralelos de até CONCURRENCY_LIMIT — muito mais eficiente
+ * que a abordagem anterior de varrer todos os contatos e filtrar localmente.
  *
- * @param orgIds   Set de cod_ref das organizações (Empresa, personType=2)
- * @param select   Campos da pessoa a retornar (organization sempre incluído internamente)
- * @param expand   $expand extra além do necessário (opcional)
- * @param maxPages Limite de segurança de páginas (padrão 200 × 100 = 20 k registros)
+ * `relationships` também é um campo de navegação confirmado: passe-o em `expand` para
+ * receber os vínculos completos de cada pessoa retornada.
+ *
+ * @param orgIds   Set de cod_ref das organizações
+ * @param select   Campos da pessoa a retornar
+ * @param expand   $expand extra além de "relationships" (que é sempre incluído)
+ * @param maxPages Limite de páginas POR ORGANIZAÇÃO (padrão 50 × 100 = até 5 k por org)
  */
+const CONCURRENCY_LIMIT = 5;
+
 export async function getPersonsInOrganizations(
   orgIds: Set<string>,
   select: string[],
   expand?: string,
-  maxPages = 200,
+  maxPages = 50,
 ): Promise<{ persons: Person[]; totalScanned: number; hitCap: boolean }> {
   if (orgIds.size === 0) return { persons: [], totalScanned: 0, hitCap: false };
 
-  // Garante que organization esteja no select para poder filtrar localmente
-  const safeSelect = select.includes("organization") ? select : [...select, "organization"];
+  // Garante que relationships esteja no expand para confirmar o vínculo
+  const safeExpand = expand
+    ? (expand.includes("relationships") ? expand : `relationships,${expand}`)
+    : "relationships";
 
-  const { persons: all, pagesFetched, hitCap } = await searchPersonsExhaustive(
-    {
-      filter: `personType eq ${PERSON_TYPE.PESSOA}`,
-      select: safeSelect,
-      expand,
-    },
-    { maxPages },
-  );
+  const orgIdArray = [...orgIds];
+  const seen = new Set<string>();
+  const allPersons: Person[] = [];
+  let totalFromApi = 0;
+  let anyHitCap = false;
 
-  const matched = all.filter(
-    (p) => p.organization && typeof p.organization === "object" && orgIds.has((p.organization as { id: string }).id),
-  );
+  // Processa em lotes de CONCURRENCY_LIMIT para não explodir o rate limit (10 req/min)
+  for (let i = 0; i < orgIdArray.length; i += CONCURRENCY_LIMIT) {
+    const batch = orgIdArray.slice(i, i + CONCURRENCY_LIMIT);
+    const results = await Promise.all(
+      batch.map((orgId) =>
+        searchPersonsExhaustive(
+          {
+            filter: `relationships/any(r: r/id eq '${odataEscape(orgId)}')`,
+            select,
+            expand: safeExpand,
+          },
+          { maxPages },
+        ),
+      ),
+    );
 
-  return { persons: matched, totalScanned: all.length, hitCap };
+    for (const { persons, hitCap } of results) {
+      totalFromApi += persons.length;
+      if (hitCap) anyHitCap = true;
+      // Deduplica por id — uma pessoa pode aparecer em mais de uma organização
+      for (const p of persons) {
+        if (!seen.has(p.id)) {
+          seen.add(p.id);
+          allPersons.push(p);
+        }
+      }
+    }
+  }
+
+  // totalScanned = total retornado pela API antes da deduplicação
+  return { persons: allPersons, totalScanned: totalFromApi, hitCap: anyHitCap };
 }
 
 /**
