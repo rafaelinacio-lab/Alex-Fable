@@ -100,6 +100,12 @@ const schemas = {
   movidesk_search_tickets_exhaustive: z.object({
     filter: z.string(),
     select: z.array(z.string()).min(1),
+    /**
+     * $expand para trazer objetos/coleções de navegação que NÃO vêm no $select puro.
+     * Exemplos confirmados: "owner" (objeto singular), "clients" (coleção), "actions".
+     * Múltiplos valores separados por vírgula: "owner,clients".
+     */
+    expand: z.string().optional(),
     page_size: z.number().int().positive().max(1000).default(1000),
     max_pages: z.number().int().positive().max(200).default(100),
     only_open: z.boolean().default(false),
@@ -123,6 +129,8 @@ const schemas = {
       .min(2)
       .max(5),
     select: z.array(z.string()).min(1),
+    /** $expand compartilhado por todas as branches (ex: "owner,clients"). */
+    expand: z.string().optional(),
     page_size: z.number().int().positive().max(1000).default(1000),
     max_pages: z.number().int().positive().max(200).default(100),
   }),
@@ -134,6 +142,7 @@ const schemas = {
   export_tickets_search_to_excel: z.object({
     filter: z.string(),
     select: z.array(z.string()).min(1),
+    expand: z.string().optional(),
     page_size: z.number().int().positive().max(1000).default(1000),
     max_pages: z.number().int().positive().max(200).default(100),
     only_open: z.boolean().default(false),
@@ -149,6 +158,7 @@ const schemas = {
   export_tickets_search_to_pdf: z.object({
     filter: z.string(),
     select: z.array(z.string()).min(1),
+    expand: z.string().optional(),
     page_size: z.number().int().positive().max(1000).default(1000),
     max_pages: z.number().int().positive().max(200).default(100),
     only_open: z.boolean().default(false),
@@ -213,7 +223,7 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   movidesk_search_tickets_past:
     "Como movidesk_search_tickets, mas na rota /tickets/past (chamados com lastUpdate há mais de 90 dias). Sintaxe assumida por analogia — não 100% confirmada; se o retorno vier estranho, trate como comportamento não documentado.",
   movidesk_search_tickets_exhaustive:
-    "Busca exaustiva padrão — percorre AUTOMATICAMENTE as duas rotas da API em sequência (Fase 1: /tickets → Fase 2: /tickets/past) até o fim real dos resultados em cada uma, exatamente como o fluxo n8n de referência. Use SEMPRE que precisar de total real ou de 'todos os chamados' — nunca soma manualmente chamadas separadas de movidesk_search_tickets. NÃO há parâmetro 'source': as duas fases são sempre percorridas; omitir uma significaria perder chamados silenciosamente (recentes ficam só em /tickets, antigos só em /tickets/past). O retorno inclui phasesCompleted (quais fases terminaram normalmente) e hitCap (true = limite de segurança atingido, total pode ser maior — reporte isso ao usuário). Para exportação em Excel/PDF, use export_tickets_search_to_excel / export_tickets_search_to_pdf diretamente. Para 'chamados em aberto', use only_open:true — NÃO filtre status via OData ne/not (operadores não confirmados nesta API, já causaram bug real: Resolvidos aparecendo como Abertos).",
+    "Busca exaustiva padrão — percorre AUTOMATICAMENTE as duas rotas da API em sequência (Fase 1: /tickets → Fase 2: /tickets/past) até o fim real dos resultados em cada uma, exatamente como o fluxo n8n de referência. Use SEMPRE que precisar de total real ou de 'todos os chamados' — nunca soma manualmente chamadas separadas de movidesk_search_tickets. NÃO há parâmetro 'source': as duas fases são sempre percorridas; omitir uma significaria perder chamados silenciosamente (recentes ficam só em /tickets, antigos só em /tickets/past). O retorno inclui phasesCompleted (quais fases terminaram normalmente) e hitCap (true = limite de segurança atingido, total pode ser maior — reporte isso ao usuário). Para exportação em Excel/PDF, use export_tickets_search_to_excel / export_tickets_search_to_pdf diretamente. Para 'chamados em aberto', use only_open:true — NÃO filtre status via OData ne/not (operadores não confirmados nesta API, já causaram bug real: Resolvidos aparecendo como Abertos). IMPORTANTE: 'owner' e 'clients' são objetos/coleções de navegação OData — eles NÃO vêm no $select puro. Para trazê-los, passe expand:'owner' e/ou expand:'clients' (ou ambos: expand:'owner,clients'). Sem isso o campo virá ausente mesmo que listado em select.",
   movidesk_search_tickets_parallel:
     "Busca paralela com múltiplos filtros independentes — replica o padrão de DUAS RAMIFICAÇÕES do fluxo n8n de referência. Cada branch define seu próprio filter OData e label (ex: {label:'abertos_2026', filter:'createdDate ge ...'} e {label:'fechados_2026', filter:'resolvedIn ge ...'}). Todas as branches executam em paralelo (Promise.all), cada uma com paginação dual automática (current + past), e os resultados são consolidados ao final. Use este tool quando o usuário pedir CONTAGEM ou COMPARAÇÃO de chamados por diferentes critérios de data/status em uma única chamada — ex: 'quantos chamados foram abertos e quantos foram fechados em 2026'. O retorno traz counts e uma amostra por branch, mais o union_count (tickets únicos, desduplicados por id). Para exportar múltiplas branches para Excel, use export_tickets_search_to_excel separadamente para cada filter.",
   export_tickets_to_excel:
@@ -379,7 +389,7 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
 
     case "movidesk_search_tickets_exhaustive": {
       const result = await searchTicketsExhaustive(
-        { filter: input.filter, select: input.select },
+        { filter: input.filter, select: input.select, expand: input.expand },
         { pageSize: input.page_size, maxPages: input.max_pages, onlyOpen: input.only_open },
       );
       // Só devolve uma amostra inline para o modelo comentar/resumir — devolver os
@@ -416,7 +426,7 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
       const branchResults = await Promise.all(
         input.branches.map(async (branch: { label: string; filter: string; only_open: boolean }) => {
           const result = await searchTicketsExhaustive(
-            { filter: branch.filter, select: input.select },
+            { filter: branch.filter, select: input.select, expand: input.expand },
             { pageSize: input.page_size, maxPages: input.max_pages, onlyOpen: branch.only_open },
           );
           return { label: branch.label, only_open: branch.only_open, result };
@@ -471,7 +481,7 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
 
     case "export_tickets_search_to_excel": {
       const result = await searchTicketsExhaustive(
-        { filter: input.filter, select: input.select },
+        { filter: input.filter, select: input.select, expand: input.expand },
         { pageSize: input.page_size, maxPages: input.max_pages, onlyOpen: input.only_open },
       );
       if (result.tickets.length === 0) {
@@ -510,7 +520,7 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
 
     case "export_tickets_search_to_pdf": {
       const result = await searchTicketsExhaustive(
-        { filter: input.filter, select: input.select },
+        { filter: input.filter, select: input.select, expand: input.expand },
         { pageSize: input.page_size, maxPages: input.max_pages, onlyOpen: input.only_open },
       );
       if (result.tickets.length === 0) {

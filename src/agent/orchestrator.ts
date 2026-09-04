@@ -138,6 +138,7 @@ const TOOL_PARAMETERS: Record<ToolName, Record<string, unknown>> = {
     properties: {
       filter: { type: "string" },
       select: { type: "array", items: { type: "string" } },
+      expand: { type: "string" },
       page_size: { type: "integer" },
       max_pages: { type: "integer" },
       only_open: { type: "boolean" },
@@ -164,6 +165,7 @@ const TOOL_PARAMETERS: Record<ToolName, Record<string, unknown>> = {
         maxItems: 5,
       },
       select: { type: "array", items: { type: "string" } },
+      expand: { type: "string" },
       page_size: { type: "integer" },
       max_pages: { type: "integer" },
     },
@@ -192,6 +194,7 @@ const TOOL_PARAMETERS: Record<ToolName, Record<string, unknown>> = {
     properties: {
       filter: { type: "string" },
       select: { type: "array", items: { type: "string" } },
+      expand: { type: "string" },
       page_size: { type: "integer" },
       max_pages: { type: "integer" },
       only_open: { type: "boolean" },
@@ -231,6 +234,7 @@ const TOOL_PARAMETERS: Record<ToolName, Record<string, unknown>> = {
     properties: {
       filter: { type: "string" },
       select: { type: "array", items: { type: "string" } },
+      expand: { type: "string" },
       page_size: { type: "integer" },
       max_pages: { type: "integer" },
       only_open: { type: "boolean" },
