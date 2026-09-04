@@ -589,6 +589,7 @@ Quando pedirem um novo fluxo:
 ## 13. Fontes oficiais a consultar quando houver dúvida
 
 - **Prioridade 1** — `docs/movidesk-api-tickets.md` (neste repositório): documentação da API de Tickets já verificada e versionada, com endpoints, parâmetros, enums e exemplos confirmados. Consulte antes de supor comportamento não coberto pelo prompt.
+- **Prioridade 1b** — `docs/movidesk-custom-fields.md` (neste repositório): catálogo completo dos **campos adicionais** (`customFieldValues`) do tenant Viasoft — 522 campos (501 para Ticket, 21 para Pessoa) com seus IDs numéricos, nomes e tipos. Use este arquivo sempre que precisar localizar um campo adicional específico para ler, filtrar ou preencher em um chamado. Nunca invente um `customFieldId` — consulte este catálogo primeiro.
 - Visão geral da API: `https://atendimento.movidesk.com/kb/en/article/130599/api-do-movidesk`
 - API de Tickets: `https://atendimento.movidesk.com/kb/pt-br/article/256/movidesk-ticket-api`
 - API de Pessoas: `https://atendimento.movidesk.com/kb/en/article/189/movidesk-person-api`
