@@ -681,21 +681,51 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
       const resolvedIds = new Set<string>(input.org_ids as string[]);
       const resolveErrors: string[] = [];
 
-      // Resolve por CNPJ → cpfCnpj da pessoa Empresa
+      // Resolve por CNPJ → tenta 3 estratégias em cascata:
+      //   1. eq com dígitos puros  (como API pode armazenar)
+      //   2. eq com CNPJ formatado (XX.XXX.XXX/XXXX-XX)
+      //   3. contains com dígitos  (fallback parcial)
       for (const cnpj of (input.org_cnpjs as string[])) {
-        try {
-          const orgs = await searchPersons({
-            filter: `personType eq 2 and cpfCnpj eq '${odataEscape(cnpj)}'`,
-            select: ["id", "businessName", "cpfCnpj"],
-            top: 5,
-          });
-          if (orgs.length > 0) {
-            orgs.forEach((o) => resolvedIds.add(o.id));
-          } else {
-            resolveErrors.push(`CNPJ "${cnpj}" não encontrou nenhuma organização.`);
-          }
-        } catch (e) {
-          resolveErrors.push(`Erro ao resolver CNPJ "${cnpj}": ${String(e)}`);
+        const digits = cnpj.replace(/\D/g, "");
+        // Formata como XX.XXX.XXX/XXXX-XX
+        const formatted =
+          digits.length === 14
+            ? `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`
+            : cnpj;
+
+        let found = false;
+        for (const candidate of [digits, formatted, cnpj]) {
+          if (found) break;
+          try {
+            const orgs = await searchPersons({
+              filter: `personType eq 2 and cpfCnpj eq '${odataEscape(candidate)}'`,
+              select: ["id", "businessName", "cpfCnpj"],
+              top: 5,
+            });
+            if (orgs.length > 0) {
+              orgs.forEach((o) => resolvedIds.add(o.id));
+              found = true;
+            }
+          } catch { /* tenta próximo candidato */ }
+        }
+
+        // Fallback: contains com os dígitos puros
+        if (!found) {
+          try {
+            const orgs = await searchPersons({
+              filter: `personType eq 2 and contains(cpfCnpj,'${odataEscape(digits)}')`,
+              select: ["id", "businessName", "cpfCnpj"],
+              top: 5,
+            });
+            if (orgs.length > 0) {
+              orgs.forEach((o) => resolvedIds.add(o.id));
+              found = true;
+            }
+          } catch { /* ignora */ }
+        }
+
+        if (!found) {
+          resolveErrors.push(`CNPJ "${cnpj}" (digits: ${digits}) não encontrou organização (tentativas: eq digits, eq formatado, contains).`);
         }
       }
 
