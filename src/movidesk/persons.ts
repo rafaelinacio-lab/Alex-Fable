@@ -86,6 +86,44 @@ export async function searchPersonsExhaustive(
 }
 
 /**
+ * Busca todas as pessoas físicas (personType=1) vinculadas a um conjunto de organizações.
+ *
+ * Estratégia: em vez de N chamadas (uma por org), busca TODOS os contatos e filtra
+ * localmente pelo organization.id — mais eficiente contra o rate limit de 10 req/min.
+ *
+ * @param orgIds   Set de cod_ref das organizações (Empresa, personType=2)
+ * @param select   Campos da pessoa a retornar (organization sempre incluído internamente)
+ * @param expand   $expand extra além do necessário (opcional)
+ * @param maxPages Limite de segurança de páginas (padrão 200 × 100 = 20 k registros)
+ */
+export async function getPersonsInOrganizations(
+  orgIds: Set<string>,
+  select: string[],
+  expand?: string,
+  maxPages = 200,
+): Promise<{ persons: Person[]; totalScanned: number; hitCap: boolean }> {
+  if (orgIds.size === 0) return { persons: [], totalScanned: 0, hitCap: false };
+
+  // Garante que organization esteja no select para poder filtrar localmente
+  const safeSelect = select.includes("organization") ? select : [...select, "organization"];
+
+  const { persons: all, pagesFetched, hitCap } = await searchPersonsExhaustive(
+    {
+      filter: `personType eq ${PERSON_TYPE.PESSOA}`,
+      select: safeSelect,
+      expand,
+    },
+    { maxPages },
+  );
+
+  const matched = all.filter(
+    (p) => p.organization && typeof p.organization === "object" && orgIds.has((p.organization as { id: string }).id),
+  );
+
+  return { persons: matched, totalScanned: all.length, hitCap };
+}
+
+/**
  * Filtra localmente por um campo adicional (customFieldValues).
  * Usar após buscar com $expand=customFieldValues.
  *

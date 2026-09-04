@@ -27,7 +27,7 @@ import {
   createTicket,
   patchTicket,
 } from "../movidesk/tickets.js";
-import { getPerson, searchPersons, searchPersonsExhaustive, filterByCustomField, searchOrganizationsByName } from "../movidesk/persons.js";
+import { getPerson, searchPersons, searchPersonsExhaustive, filterByCustomField, getPersonsInOrganizations, searchOrganizationsByName } from "../movidesk/persons.js";
 import { getService, searchServices } from "../movidesk/services.js";
 import { odataEscape, MovideskApiError } from "../movidesk/client.js";
 import { recordAuditEvent, hashPayload, newCorrelationId } from "../store/audit.js";
@@ -206,6 +206,25 @@ const schemas = {
     /** Máximo de registros a varrer antes de parar. Default 3000. */
     max_records: z.number().int().positive().max(10000).default(3000),
   }),
+  /**
+   * Dado um conjunto de identificadores de organizações (IDs, CNPJs ou razões sociais),
+   * retorna todas as pessoas físicas (personType=1) vinculadas a elas.
+   * Resolve cada identificador para um cod_ref de org antes de buscar as pessoas.
+   * Busca todos os contatos e filtra localmente — não faz N chamadas individuais.
+   */
+  movidesk_get_persons_in_organizations: z.object({
+    /** IDs (cod_ref) diretos de organizações já conhecidos. */
+    org_ids: z.array(z.string().min(1)).max(500).default([]),
+    /** CNPJs a resolver para org — busca via campo cpfCnpj da pessoa (tipo Empresa). */
+    org_cnpjs: z.array(z.string().min(1)).max(50).default([]),
+    /** Razões sociais / nomes para resolver via contains(businessName). */
+    org_names: z.array(z.string().min(1)).max(50).default([]),
+    select: z.array(z.string()).min(1),
+    /** $expand extra (ex: "customFieldValues") além do que já é incluído. */
+    extra_expand: z.string().optional(),
+    /** Máximo de páginas de 100 a varrer para buscar pessoas (padrão 200 = até 20 000). */
+    max_pages: z.number().int().positive().max(500).default(200),
+  }),
   check_pending_customer_tickets: z.object({}),
   movidesk_get_service: z.object({ id: z.number().int().positive() }),
   movidesk_search_services: z.object({
@@ -260,6 +279,8 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
     "Cria um chamado Movidesk. Exige idempotency_key (gerada previamente). Só cria de fato se a chave ainda não tiver um resultado bem-sucedido.",
   movidesk_patch_ticket:
     "Atualiza um chamado Movidesk existente (status, campos, ações). Ao alterar status, inclua também justification.",
+  movidesk_get_persons_in_organizations:
+    "Retorna todas as pessoas físicas (contatos, personType=1) vinculadas a um conjunto de organizações. Aceita org_ids (cod_ref direto), org_cnpjs (CNPJ — resolve via cpfCnpj da organização) e org_names (razão social — resolve via contains(businessName)). Pode receber qualquer combinação dos três: resolve cada um para um cod_ref de organização e depois busca todos os contatos vinculados. Use APÓS movidesk_search_persons_by_custom_field quando precisar das pessoas de organizações filtradas por campo adicional, ou diretamente quando já tiver IDs/CNPJs/nomes. Faz uma busca de todos os contatos + filtro local — não faz N chamadas individuais (evita esgotar o rate limit de 10 req/min).",
   movidesk_get_person: "Busca uma pessoa Movidesk por cod_ref.",
   movidesk_search_persons:
     "Busca pessoas Movidesk via OData. $select é obrigatório. Passe expand:'customFieldValues' para trazer os campos adicionais de cada registro — necesário para ler campos como 'Vertical Viasoft', 'Departamento', etc.",
@@ -654,6 +675,79 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
         top: input.top,
         skip: input.skip,
       });
+
+    case "movidesk_get_persons_in_organizations": {
+      // 1. Resolve os identificadores para cod_ref de organização
+      const resolvedIds = new Set<string>(input.org_ids as string[]);
+      const resolveErrors: string[] = [];
+
+      // Resolve por CNPJ → cpfCnpj da pessoa Empresa
+      for (const cnpj of (input.org_cnpjs as string[])) {
+        try {
+          const orgs = await searchPersons({
+            filter: `personType eq 2 and cpfCnpj eq '${odataEscape(cnpj)}'`,
+            select: ["id", "businessName", "cpfCnpj"],
+            top: 5,
+          });
+          if (orgs.length > 0) {
+            orgs.forEach((o) => resolvedIds.add(o.id));
+          } else {
+            resolveErrors.push(`CNPJ "${cnpj}" não encontrou nenhuma organização.`);
+          }
+        } catch (e) {
+          resolveErrors.push(`Erro ao resolver CNPJ "${cnpj}": ${String(e)}`);
+        }
+      }
+
+      // Resolve por razão social → contains(businessName)
+      for (const name of (input.org_names as string[])) {
+        try {
+          const orgs = await searchOrganizationsByName(name, 10);
+          if (orgs.length > 0) {
+            orgs.forEach((o) => resolvedIds.add(o.id));
+          } else {
+            resolveErrors.push(`Nome "${name}" não encontrou nenhuma organização.`);
+          }
+        } catch (e) {
+          resolveErrors.push(`Erro ao resolver nome "${name}": ${String(e)}`);
+        }
+      }
+
+      if (resolvedIds.size === 0) {
+        return {
+          persons: [],
+          matched_count: 0,
+          org_ids_resolved: [],
+          resolve_errors: resolveErrors,
+          note: "Nenhum cod_ref de organização foi resolvido — verifique os identificadores fornecidos.",
+        };
+      }
+
+      // 2. Busca todas as pessoas físicas e filtra localmente por organization.id
+      const { persons, totalScanned, hitCap } = await getPersonsInOrganizations(
+        resolvedIds,
+        input.select as string[],
+        input.extra_expand as string | undefined,
+        input.max_pages as number,
+      );
+
+      const MAX_INLINE = 200;
+      return {
+        matched_count: persons.length,
+        org_ids_resolved: [...resolvedIds],
+        total_scanned: totalScanned,
+        hit_cap: hitCap,
+        resolve_errors: resolveErrors.length > 0 ? resolveErrors : undefined,
+        persons: persons.slice(0, MAX_INLINE),
+        persons_truncated: persons.length > MAX_INLINE,
+        note:
+          `${resolvedIds.size} organização(ões) resolvida(s). ` +
+          `Varreu ${totalScanned} contatos${hitCap ? ` (limite de ${input.max_pages} páginas atingido — pode haver mais)` : " (varredura completa)"}. ` +
+          `${persons.length} contato(s) vinculado(s) encontrado(s).` +
+          (persons.length > MAX_INLINE ? ` Só as primeiras ${MAX_INLINE} pessoas aparecem inline.` : "") +
+          (resolveErrors.length > 0 ? ` Erros de resolução: ${resolveErrors.join(" | ")}` : ""),
+      };
+    }
 
     case "movidesk_search_persons_by_custom_field": {
       const expand = input.extra_expand

@@ -305,6 +305,19 @@ const TOOL_PARAMETERS: Record<ToolName, Record<string, unknown>> = {
     required: ["custom_field_id", "select"],
     additionalProperties: false,
   },
+  movidesk_get_persons_in_organizations: {
+    type: "object",
+    properties: {
+      org_ids: { type: "array", items: { type: "string" } },
+      org_cnpjs: { type: "array", items: { type: "string" } },
+      org_names: { type: "array", items: { type: "string" } },
+      select: { type: "array", items: { type: "string" } },
+      extra_expand: { type: "string" },
+      max_pages: { type: "integer" },
+    },
+    required: ["select"],
+    additionalProperties: false,
+  },
   check_pending_customer_tickets: { type: "object", properties: {}, additionalProperties: false },
   movidesk_get_service: {
     type: "object",
