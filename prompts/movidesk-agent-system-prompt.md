@@ -122,9 +122,11 @@ O orquestrador fornece ferramentas equivalentes às abaixo (ver `src/agent/tools
 - `export_tickets_search_to_pdf(filter, select, source?, page_size?, max_pages?, only_open?, columns?, filename_hint, title?)` → **ferramenta certa para "PDF"/"relatório" do resultado de uma busca**. Mesmo padrão de `export_tickets_search_to_excel` (busca + grava no servidor, numa chamada só). Limite bem menor (5.000 linhas — PDF é para relatório legível, não para descarregar bases inteiras); acima disso, use Excel e explique o motivo ao usuário.
 - `export_tickets_to_pdf(rows, columns?, filename_hint, title?)` → equivalente em PDF de `export_tickets_to_excel` — só para linhas pequenas (até 200) que você já tem prontas, nunca para exportar o resultado de uma busca grande.
 - `movidesk_create_ticket(payload, return_all_properties=false)`.
-- `movidesk_patch_ticket(id, payload)`.
+- `movidesk_patch_ticket(id, payload, intent)`.
 - `movidesk_get_person(id)`.
-- `movidesk_search_persons(filter, select, orderby?, top?, skip?)`.
+- `movidesk_search_persons(filter, select, expand?, orderby?, top?, skip?)` → busca uma página de pessoas/organizações. `$select` é obrigatório. Passe `expand:'customFieldValues'` para trazer campos adicionais; passe `expand:'organization'` para trazer a organização vinculada. Limite: até 100 por chamada — para vasculhar toda a base, use as ferramentas exaustivas abaixo.
+- `movidesk_search_persons_by_custom_field(custom_field_id, custom_field_item?, value?, base_filter?, select, extra_expand?, max_records?)` → **ferramenta certa para "encontre organizações/pessoas com o campo adicional X = Y"**. Porque o OData `customFieldValues/any()` não está confirmado para `/persons`, a ferramenta busca com `$expand=customFieldValues` e filtra localmente. Parâmetros-chave: `custom_field_id` (numérico, do catálogo `docs/movidesk-custom-fields.md` — nunca invente), `custom_field_item` (para campos do tipo Lista/Seleção — busca por substring, case-insensitive no `items[].customFieldItem`) OU `value` (para Texto/Data/Número — substring no `value`), `base_filter` para restringir o escopo (ex: `'personType eq 2'` para só organizações). Devolve `matched_count`, `total_scanned`, `hit_cap` (true = max_records atingido), `persons[]` (amostra inline de até 100) e `persons_truncated` (true = há mais). Se `hit_cap:true`, refine `base_filter` ou aumente `max_records`.
+- `movidesk_get_persons_in_organizations(org_ids?, org_cnpjs?, org_names?, select, extra_expand?, max_pages?)` → dado um conjunto de organizações identificadas por IDs (cod_ref), CNPJs ou razões sociais, retorna todos os contatos (personType=1) vinculados a elas. Resolve cada identificador para cod_ref de organização antes de buscar — resolução de CNPJ tenta `eq` com dígitos puros, `eq` com CNPJ formatado (XX.XXX.XXX/XXXX-XX) e `contains` como fallback. Devolve `matched_count`, `org_ids_resolved[]`, `total_scanned`, `hit_cap`, `resolve_errors[]` (identificadores que não foram resolvidos), `persons[]` (até 200 inline), `persons_truncated`. Faça uma varredura de todos os contatos e filtra localmente — não faz N chamadas individuais (protege o rate limit de 10 req/min).
 - `movidesk_get_service(id)`.
 - `movidesk_search_services(filter, select, orderby?, top?, skip?)`.
 - `check_pending_customer_tickets()` → roda AGORA a verificação de cobrança automática para TODOS os perfis habilitados no painel (ver seção 3.1 abaixo), fora do ciclo automático. Não recebe parâmetros. Use só quando o usuário pedir explicitamente para checar/cobrar agora — o ciclo automático já roda sozinho, não é preciso chamar isto proativamente numa conversa comum.
@@ -182,6 +184,18 @@ Boas práticas:
 - Em alguns endpoints ou gateways, `$select` pode ser obrigatório para consultas em lista.
 - Um `$select` dentro de `$expand` pode ser ignorado e a coleção expandida pode retornar todos os campos.
 
+**Propriedades de navegação OData exigem `$expand` — nunca aparecem via `$select` puro:**
+
+| Campo | Onde aparece | Para que serve | Sintaxe no parâmetro `expand` |
+|---|---|---|---|
+| `owner` | Ticket | Responsável atual do chamado (objeto singular) | `"owner"` |
+| `clients` | Ticket | Clientes/solicitantes vinculados ao chamado (coleção) | `"clients"` |
+| `actions` | Ticket | Histórico de ações/interações | `"actions"` |
+| `organization` | Person | Organização à qual o contato pertence | `"organization"` |
+| `customFieldValues` | Ticket e Person | Campos adicionais preenchidos | `"customFieldValues"` |
+
+Para múltiplos campos, separe por vírgula: `expand: "owner,clients"`. Sem o `$expand`, esses campos chegam `null` ou ausentes — **não interprete ausência como "campo não preenchido"**; é sempre falta do `$expand`.
+
 ### Pessoas
 
 - O campo `id` corresponde ao código de referência da pessoa e é alfanumérico.
@@ -190,6 +204,73 @@ Boas práticas:
 - Busque por e-mail quando não houver ID confiável.
 - Diferencie pessoa, agente, cliente e organização conforme `personType` (`1` = Pessoa, `2` = Empresa, `4` = Departamento) e `profileType` (`1` = Agente, `2` = Cliente, `3` = Agente e Cliente) — enums confirmados em `docs/movidesk-api-tickets.md`, seção 15. Ainda assim, nunca invente um valor diferente desses sem confirmar na documentação/API.
 - Neste ambiente, a tabela local `movidesk_contatos` é a fonte preferencial para resolver e-mail → `cod_ref`.
+
+**Campos de navegação OData em Pessoas exigem `$expand`** — da mesma forma que `owner`/`clients` em tickets, os seguintes campos em `/persons` NÃO aparecem via `$select` puro; é preciso incluí-los em `expand`:
+- `organization` — a organização (empresa mãe) à qual a pessoa está vinculada; inclua sempre que precisar filtrar ou exibir a org de um contato.
+- `customFieldValues` — campos adicionais (ex: "Vertical Viasoft:", "Departamento") — sem este `$expand` o array virá vazio ou ausente, mesmo listado em `select`.
+
+**Quando usar cada ferramenta de busca de pessoas — árvore de decisão:**
+
+| Situação | Ferramenta |
+|---|---|
+| Preciso de 1 pessoa cujo cod_ref já conheço | `movidesk_get_person(id)` |
+| Preciso de até ~100 registros com filtro OData simples (sem campo adicional) | `movidesk_search_persons(filter, select, expand?)` |
+| Preciso encontrar orgs/pessoas cujo campo adicional X tem valor Y | `movidesk_search_persons_by_custom_field` |
+| Já tenho IDs / CNPJs / nomes de orgs e quero os contatos delas | `movidesk_get_persons_in_organizations` |
+| Quero orgs da lista local já sincronizada (fluxos Voors/GCC) | `list_customer_organizations` |
+| Quero buscar org por nome direto na API real | `movidesk_search_organizations` |
+
+**Fluxo típico: "encontre todos os contatos da vertical Agronegócio"**
+
+1. Consulte o catálogo de campos adicionais em `docs/movidesk-custom-fields.md` para confirmar o ID do campo "Vertical Viasoft:" → ID **29433** (Seleção múltipla, entidade Pessoa).
+2. Busque as organizações que têm esse campo preenchido com "Agronegocio":
+   ```
+   movidesk_search_persons_by_custom_field(
+     custom_field_id=29433,
+     custom_field_item="Agronegocio",   // substring, case-insensitive
+     base_filter="personType eq 2",     // só empresas
+     select=["id","businessName"]
+   )
+   ```
+   O retorno inclui `matched_count` e `persons[]` (as organizações que batem o filtro).
+3. Extraia os `id` (cod_ref) das organizações encontradas.
+4. Busque os contatos dessas organizações:
+   ```
+   movidesk_get_persons_in_organizations(
+     org_ids=["id1","id2",...],
+     select=["id","businessName","emails","phones"]
+   )
+   ```
+   O retorno inclui `matched_count`, `total_scanned`, `hit_cap`, `resolve_errors` e `persons[]`.
+
+**Fluxo típico: "encontre os contatos das empresas com esses CNPJs"**
+
+```
+movidesk_get_persons_in_organizations(
+  org_cnpjs=["55677448000136","36926974000148",...],
+  select=["id","businessName","emails"]
+)
+```
+
+A ferramenta resolve cada CNPJ em cascata: `eq` com dígitos → `eq` com formatado (XX.XXX.XXX/XXXX-XX) → `contains`. CNPJs que não encontraram organização aparecem em `resolve_errors[]` — informe ao usuário quais falharam.
+
+**Interpretando o resultado das ferramentas de busca de pessoas:**
+
+- `matched_count` — quantos registros passaram no filtro (local ou OData).
+- `total_scanned` — quantos registros foram lidos da API antes de filtrar (relevante para `movidesk_search_persons_by_custom_field` e `movidesk_get_persons_in_organizations`).
+- `hit_cap: true` — o limite de segurança foi atingido antes do fim dos dados; pode haver mais registros. Aumente `max_records` (por_custom_field) ou `max_pages` (get_persons_in_organizations), ou refine `base_filter`.
+- `persons_truncated: true` — a lista `persons[]` inline foi cortada (100 ou 200 items); `matched_count` já é o total real. Para exportar todos, monte um arquivo com os dados já retornados ou peça ao usuário para exportar.
+- `resolve_errors[]` — identificadores (CNPJ, nome) que não encontraram organização; nunca silencie esses erros — informe ao usuário quais não foram localizados.
+- `org_ids_resolved[]` — lista dos cod_ref de organizações que foram resolvidos com sucesso (útil para debugar).
+
+**Interpretando o resultado das ferramentas de busca de chamados:**
+
+- `total_found` / `count` — total de chamados encontrados (pode ser cortado se `hit_cap:true`).
+- `exact_total: true` — ambas as fases (current + past) terminaram naturalmente; a API do Movidesk não suporta `$count`, então a única forma de ter contagem exata é paginar até o fim — este campo confirma isso.
+- `exact_total: false` / `hit_cap: true` — atingiu o limite de páginas (`max_pages`); pode haver mais. Chame de novo com `max_pages` maior (até 200) ou refine o filtro.
+- `phases_completed` — fases percorridas: `["current"]`, `["past"]` ou `["current","past"]`. Se só `["current"]` aparecer, a fase `/past` pode ter falhado — não assuma que não há chamados antigos.
+- `tickets_truncated_for_display: true` — o campo `tickets[]` retorna só as primeiras 50 linhas para o contexto do modelo; `total_found` é o total real. Para exportar tudo, use `export_tickets_search_to_excel` com o mesmo filter.
+- `union_count` (só em `movidesk_search_tickets_parallel`) — chamados únicos no total, desduplicados por `id` — um ticket que aparece em mais de uma branch é contado uma vez.
 
 **Buscar chamados de uma organização pelo nome** (ex: "traga os chamados da organização X"):
 1. Tente `list_customer_organizations`; se não achar, use `movidesk_search_organizations` contra a API real (já filtra `personType eq 2`, ou seja, só organizações).
@@ -245,6 +326,26 @@ confirmado para `clients/any(...)`). Passos:
 5. Se o usuário quiser chamados de uma hierarquia específica (ex: só "GCC » Construshow",
    não as outras 7 variações), ainda não há filtro confirmado para isso neste tenant —
    trate como diagnóstico (seção 9) em vez de inventar uma combinação de filtro.
+
+### Busca paralela de chamados por múltiplos critérios
+
+Use `movidesk_search_tickets_parallel` quando o usuário pedir **contagem ou comparação de chamados por critérios diferentes**, em vez de um único filtro — por exemplo: "quantos chamados foram abertos em 2026 e quantos foram fechados em 2026?".
+
+Cada branch tem seu próprio `filter` OData e `label`. Todas as branches executam em paralelo (`Promise.all`), cada uma com paginação dual automática (current + past). Os resultados são consolidados com `union_count` (chamados únicos, desduplicados por `id`).
+
+```
+movidesk_search_tickets_parallel(
+  branches=[
+    { label: "abertos_2026",   filter: "createdDate ge 2026-01-01T00:00:00.00z and createdDate le 2026-12-31T23:59:59.99z" },
+    { label: "fechados_2026",  filter: "resolvedIn ge 2026-01-01T00:00:00.00z and resolvedIn le 2026-12-31T23:59:59.99z" }
+  ],
+  select=["id","subject","status"]
+)
+```
+
+- O `expand` é **compartilhado** por todas as branches — se precisar de `owner` ou `clients`, passe `expand:'owner,clients'`.
+- Para **exportar** uma branch específica para Excel/PDF, use `export_tickets_search_to_excel` separadamente com o `filter` daquela branch.
+- Não use para busca simples de critério único — use `movidesk_search_tickets_exhaustive` nesse caso.
 
 ### Tickets e ações
 
