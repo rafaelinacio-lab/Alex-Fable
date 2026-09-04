@@ -48,3 +48,77 @@ export async function searchOrganizationsByName(query: string, top = 20): Promis
     top,
   });
 }
+
+export interface PersonsExhaustiveResult {
+  persons: Person[];
+  pagesFetched: number;
+  hitCap: boolean;
+}
+
+const DEFAULT_PERSONS_PAGE_SIZE = 100; // API de Persons não confirmou suporte a $top=1000
+
+/**
+ * Busca paginada exaustiva de pessoas/organizações.
+ * Ao contrário de /tickets, não há rota /persons/past confirmada — uma única fase.
+ * pageSize padrão = 100 (conservador; aumente para 500 se a API aceitar).
+ */
+export async function searchPersonsExhaustive(
+  base: Pick<ODataQuery, "filter" | "select" | "expand">,
+  opts?: { pageSize?: number; maxPages?: number },
+): Promise<PersonsExhaustiveResult> {
+  if (!base.select?.length) {
+    throw new Error("searchPersonsExhaustive exige select.");
+  }
+  const pageSize = opts?.pageSize ?? DEFAULT_PERSONS_PAGE_SIZE;
+  const maxPages = opts?.maxPages ?? 200;
+  const all: Person[] = [];
+  let pages = 0;
+
+  for (let skip = 0; ; skip += pageSize) {
+    if (pages >= maxPages) return { persons: all, pagesFetched: pages, hitCap: true };
+    const page = await searchPersons({ ...base, top: pageSize, skip });
+    pages++;
+    all.push(...page);
+    if (page.length < pageSize) break;
+  }
+
+  return { persons: all, pagesFetched: pages, hitCap: false };
+}
+
+/**
+ * Filtra localmente por um campo adicional (customFieldValues).
+ * Usar após buscar com $expand=customFieldValues.
+ *
+ * @param persons   Array retornado pela API com customFieldValues expandido
+ * @param fieldId   ID do campo (ex: 29433 para "Vertical Viasoft:")
+ * @param item      Valor esperado em items[].customFieldItem (para lista/seleção)
+ * @param value     Valor esperado em value (para texto/data/numérico)
+ */
+export function filterByCustomField(
+  persons: Person[],
+  fieldId: number,
+  item?: string,
+  value?: string,
+): Person[] {
+  return persons.filter((p) => {
+    const cfv = p.customFieldValues;
+    if (!Array.isArray(cfv)) return false;
+    return cfv.some((cf: Record<string, unknown>) => {
+      if (cf.customFieldId !== fieldId) return false;
+      if (item !== undefined) {
+        const items = cf.items;
+        if (!Array.isArray(items)) return false;
+        return items.some((i: Record<string, unknown>) => {
+          const fi = String(i.customFieldItem ?? "").toLowerCase();
+          return fi.includes(item.toLowerCase());
+        });
+      }
+      if (value !== undefined) {
+        return String(cf.value ?? "").toLowerCase().includes(value.toLowerCase());
+      }
+      // Sem filtro de valor — basta o campo existir preenchido
+      return cf.value !== null && cf.value !== undefined && cf.value !== "" ||
+        (Array.isArray(cf.items) && cf.items.length > 0);
+    });
+  });
+}

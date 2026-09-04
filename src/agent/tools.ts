@@ -27,7 +27,7 @@ import {
   createTicket,
   patchTicket,
 } from "../movidesk/tickets.js";
-import { getPerson, searchPersons, searchOrganizationsByName } from "../movidesk/persons.js";
+import { getPerson, searchPersons, searchPersonsExhaustive, filterByCustomField, searchOrganizationsByName } from "../movidesk/persons.js";
 import { getService, searchServices } from "../movidesk/services.js";
 import { odataEscape, MovideskApiError } from "../movidesk/client.js";
 import { recordAuditEvent, hashPayload, newCorrelationId } from "../store/audit.js";
@@ -180,9 +180,31 @@ const schemas = {
   movidesk_search_persons: z.object({
     filter: z.string(),
     select: z.array(z.string()).min(1),
+    expand: z.string().optional(),
     orderby: z.string().optional(),
     top: z.number().int().positive().max(100).default(20),
     skip: z.number().int().nonnegative().optional(),
+  }),
+  /**
+   * Busca paginada de pessoas/organizações filtrando por um campo adicional específico.
+   * Como o filtro OData por customFieldValues/any() não está confirmado para /persons,
+   * a ferramenta busca com $expand=customFieldValues e filtra localmente.
+   * Use para encontrar "todas as organizações com campo X = Y" ou
+   * "todas as pessoas vinculadas a organizações com campo X = Y".
+   */
+  movidesk_search_persons_by_custom_field: z.object({
+    custom_field_id: z.number().int().positive(),
+    /** Para campos do tipo Lista de valores / Seleção única ou múltipla: valor de items[].customFieldItem. Busca por substring (case-insensitive). */
+    custom_field_item: z.string().optional(),
+    /** Para campos do tipo Texto / Data / Numérico: valor em value. Busca por substring (case-insensitive). */
+    value: z.string().optional(),
+    /** OData filter base (além do filtro por customField). Ex: "personType eq 2" para só organizações. */
+    base_filter: z.string().optional(),
+    select: z.array(z.string()).min(1),
+    /** Campos a expandir além de customFieldValues (que é sempre incluído). */
+    extra_expand: z.string().optional(),
+    /** Máximo de registros a varrer antes de parar. Default 3000. */
+    max_records: z.number().int().positive().max(10000).default(3000),
   }),
   check_pending_customer_tickets: z.object({}),
   movidesk_get_service: z.object({ id: z.number().int().positive() }),
@@ -239,7 +261,10 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   movidesk_patch_ticket:
     "Atualiza um chamado Movidesk existente (status, campos, ações). Ao alterar status, inclua também justification.",
   movidesk_get_person: "Busca uma pessoa Movidesk por cod_ref.",
-  movidesk_search_persons: "Busca pessoas Movidesk via OData. $select é obrigatório.",
+  movidesk_search_persons:
+    "Busca pessoas Movidesk via OData. $select é obrigatório. Passe expand:'customFieldValues' para trazer os campos adicionais de cada registro — necesário para ler campos como 'Vertical Viasoft', 'Departamento', etc.",
+  movidesk_search_persons_by_custom_field:
+    "Localiza pessoas ou organizações que tenham um campo adicional específico preenchido com determinado valor. Como o filtro OData por customFieldValues/any() não está confirmado para /persons, a ferramenta busca com $expand=customFieldValues e faz filtro local — pode varrer até max_records registros. Use custom_field_id (numérico, catálogo em docs/movidesk-custom-fields.md) + custom_field_item (para lista/seleção) ou value (para texto/número/data). Para 'organizações com Vertical Viasoft = Agronegocio': custom_field_id=29433, custom_field_item='Agronegocio', base_filter='personType eq 2'. Atenção: campo 29433 é 'Seleção múltipla' em Pessoa — um registro pode ter vários itens.",
   check_pending_customer_tickets:
     "Roda AGORA (fora do agendamento automático) a verificação de cobrança para TODAS as equipes com um perfil habilitado no painel (aba Automação) — cada perfil tem sua própria equipe, status monitorados e regra de SLA (ver src/agent/followUp.ts: última ação tem que ser do owner, prazo em horas úteis conforme o expediente configurado naquele perfil). Chamados que qualificam recebem uma ação pública automática de cobrança nesta mesma chamada — não é só uma prévia. Só faz sentido se FOLLOWUP_AUTOMATION_ENABLED=true E houver ao menos um perfil habilitado (senão devolve results:[] sem buscar nada). Use quando o usuário pedir explicitamente para checar/cobrar agora, fora do ciclo automático.",
   movidesk_get_service: "Busca um serviço Movidesk por ID.",
@@ -624,10 +649,50 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
       return searchPersons({
         filter: input.filter,
         select: input.select,
+        expand: input.expand,
         orderby: input.orderby,
         top: input.top,
         skip: input.skip,
       });
+
+    case "movidesk_search_persons_by_custom_field": {
+      const expand = input.extra_expand
+        ? `customFieldValues,${input.extra_expand}`
+        : "customFieldValues";
+      const { persons, pagesFetched, hitCap } = await searchPersonsExhaustive(
+        {
+          filter: input.base_filter ?? "personType ne 0",
+          select: [...new Set([...input.select, "id", "businessName"])],
+          expand,
+        },
+        { maxPages: Math.ceil(input.max_records / 100) },
+      );
+
+      const matched = filterByCustomField(
+        persons,
+        input.custom_field_id,
+        input.custom_field_item,
+        input.value,
+      );
+
+      const MAX_INLINE = 100;
+      return {
+        matched_count: matched.length,
+        total_scanned: persons.length,
+        hit_cap: hitCap,
+        pages_fetched: pagesFetched,
+        persons: matched.slice(0, MAX_INLINE),
+        persons_truncated: matched.length > MAX_INLINE,
+        note:
+          `Varreu ${persons.length} registro(s) em ${pagesFetched} página(s).` +
+          (hitCap ? ` Atingiu o limite de max_records=${input.max_records} — pode haver mais resultados. Aumente max_records ou refine base_filter.` : " Varredura completa.") +
+          ` Encontrou ${matched.length} registro(s) com customFieldId=${input.custom_field_id}` +
+          (input.custom_field_item ? ` e item="${input.custom_field_item}"` : "") +
+          (input.value ? ` e value contendo "${input.value}"` : "") +
+          "." +
+          (matched.length > MAX_INLINE ? ` Só as primeiras ${MAX_INLINE} pessoas aparecem inline.` : ""),
+      };
+    }
 
     case "check_pending_customer_tickets": {
       if (!isFollowUpAutomationEnabled()) {
