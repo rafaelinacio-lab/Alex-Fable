@@ -35,7 +35,7 @@ export async function transcribeAudio(
   const baseMime = mimeType.split(";")[0]!.trim();
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.0-flash",
+    model: "gemini-3.6-flash",
     contents: [
       {
         role: "user",
