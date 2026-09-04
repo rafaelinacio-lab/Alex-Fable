@@ -104,6 +104,28 @@ const schemas = {
     max_pages: z.number().int().positive().max(200).default(100),
     only_open: z.boolean().default(false),
   }),
+  /**
+   * Busca paralela com múltiplos filtros — replica o padrão do fluxo n8n de referência:
+   * duas ramificações independentes (ex: abertos em 2026 E fechados em 2026) executadas
+   * em paralelo com Promise.all, cada uma com paginação dual (current + past), depois
+   * consolidadas. Ideal quando o usuário quer CONTAR chamados por período/condição
+   * diferente em uma única chamada.
+   */
+  movidesk_search_tickets_parallel: z.object({
+    branches: z
+      .array(
+        z.object({
+          label: z.string().min(1),
+          filter: z.string(),
+          only_open: z.boolean().default(false),
+        }),
+      )
+      .min(2)
+      .max(5),
+    select: z.array(z.string()).min(1),
+    page_size: z.number().int().positive().max(1000).default(1000),
+    max_pages: z.number().int().positive().max(200).default(100),
+  }),
   export_tickets_to_excel: z.object({
     rows: z.array(z.record(z.string(), z.unknown())).min(1).max(200),
     columns: z.array(z.object({ header: z.string(), key: z.string() })).optional(),
@@ -192,6 +214,8 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
     "Como movidesk_search_tickets, mas na rota /tickets/past (chamados com lastUpdate há mais de 90 dias). Sintaxe assumida por analogia — não 100% confirmada; se o retorno vier estranho, trate como comportamento não documentado.",
   movidesk_search_tickets_exhaustive:
     "Busca exaustiva padrão — percorre AUTOMATICAMENTE as duas rotas da API em sequência (Fase 1: /tickets → Fase 2: /tickets/past) até o fim real dos resultados em cada uma, exatamente como o fluxo n8n de referência. Use SEMPRE que precisar de total real ou de 'todos os chamados' — nunca soma manualmente chamadas separadas de movidesk_search_tickets. NÃO há parâmetro 'source': as duas fases são sempre percorridas; omitir uma significaria perder chamados silenciosamente (recentes ficam só em /tickets, antigos só em /tickets/past). O retorno inclui phasesCompleted (quais fases terminaram normalmente) e hitCap (true = limite de segurança atingido, total pode ser maior — reporte isso ao usuário). Para exportação em Excel/PDF, use export_tickets_search_to_excel / export_tickets_search_to_pdf diretamente. Para 'chamados em aberto', use only_open:true — NÃO filtre status via OData ne/not (operadores não confirmados nesta API, já causaram bug real: Resolvidos aparecendo como Abertos).",
+  movidesk_search_tickets_parallel:
+    "Busca paralela com múltiplos filtros independentes — replica o padrão de DUAS RAMIFICAÇÕES do fluxo n8n de referência. Cada branch define seu próprio filter OData e label (ex: {label:'abertos_2026', filter:'createdDate ge ...'} e {label:'fechados_2026', filter:'resolvedIn ge ...'}). Todas as branches executam em paralelo (Promise.all), cada uma com paginação dual automática (current + past), e os resultados são consolidados ao final. Use este tool quando o usuário pedir CONTAGEM ou COMPARAÇÃO de chamados por diferentes critérios de data/status em uma única chamada — ex: 'quantos chamados foram abertos e quantos foram fechados em 2026'. O retorno traz counts e uma amostra por branch, mais o union_count (tickets únicos, desduplicados por id). Para exportar múltiplas branches para Excel, use export_tickets_search_to_excel separadamente para cada filter.",
   export_tickets_to_excel:
     "Grava um .xlsx a partir de linhas que VOCÊ já tem em mãos (até 200 linhas — ex: um resultado pequeno que você já resumiu na conversa). NUNCA use isto para exportar o resultado de uma busca grande: você teria que retransmitir cada registro como texto na chamada de ferramenta, e isso trunca silenciosamente antes de completar (é exatamente o bug já visto: só saíam 20-500 de 643 linhas). Para exportar o resultado de uma busca — que é o caso mais comum — use export_tickets_search_to_excel, que busca e grava o arquivo inteiro no servidor, sem os dados passarem por você.",
   export_tickets_search_to_excel:
@@ -384,6 +408,57 @@ async function dispatchToolInner(name: ToolName, rawInput: unknown, ctx: AgentCo
           (input.only_open && result.fetchedBeforeOpenFilter !== undefined
             ? ` Filtro only_open aplicado: de ${result.fetchedBeforeOpenFilter} chamados retornados pela busca, ${result.tickets.length} estão em aberto (baseStatus New/InAttendance/Stopped).`
             : ""),
+      };
+    }
+
+    case "movidesk_search_tickets_parallel": {
+      // Executa todas as branches em paralelo — mesmo padrão das duas ramificações do n8n
+      const branchResults = await Promise.all(
+        input.branches.map(async (branch: { label: string; filter: string; only_open: boolean }) => {
+          const result = await searchTicketsExhaustive(
+            { filter: branch.filter, select: input.select },
+            { pageSize: input.page_size, maxPages: input.max_pages, onlyOpen: branch.only_open },
+          );
+          return { label: branch.label, only_open: branch.only_open, result };
+        }),
+      );
+
+      // Consolida: união desduplicada por id (mesmo que um ticket apareça em mais de uma branch)
+      const seenIds = new Set<number>();
+      let unionCount = 0;
+      const MAX_INLINE = 20;
+      const branchSummaries = branchResults.map(({ label, only_open, result }) => {
+        for (const t of result.tickets) {
+          if (typeof t.id === "number" && !seenIds.has(t.id)) {
+            seenIds.add(t.id);
+            unionCount++;
+          }
+        }
+        const phasesMsg = result.phasesCompleted.join(" + ") || "nenhuma concluída (limite atingido)";
+        return {
+          label,
+          count: result.tickets.length,
+          exact: !result.hitCap,
+          phases_completed: result.phasesCompleted,
+          hit_cap: result.hitCap,
+          pages_fetched: result.pagesFetched,
+          tickets_sample: result.tickets.slice(0, MAX_INLINE),
+          note:
+            `Fases: ${phasesMsg}.` +
+            (result.hitCap
+              ? ` Atingiu limite (${input.max_pages} pág × ${input.page_size}) — pode haver mais.`
+              : " Total exato.") +
+            (only_open && result.fetchedBeforeOpenFilter !== undefined
+              ? ` Filtro only_open: de ${result.fetchedBeforeOpenFilter} buscados, ${result.tickets.length} em aberto.`
+              : ""),
+        };
+      });
+
+      return {
+        branches: branchSummaries,
+        union_count: unionCount,
+        union_exact: branchResults.every(({ result }) => !result.hitCap),
+        note: `${branchSummaries.length} branches executadas em paralelo com paginação dual (current+past). union_count = chamados únicos no total (desduplicados por id). Para exportar uma branch, use export_tickets_search_to_excel com o filter correspondente.`,
       };
     }
 

@@ -138,12 +138,36 @@ const TOOL_PARAMETERS: Record<ToolName, Record<string, unknown>> = {
     properties: {
       filter: { type: "string" },
       select: { type: "array", items: { type: "string" } },
-      source: { type: "string", enum: ["current", "past"] },
       page_size: { type: "integer" },
       max_pages: { type: "integer" },
       only_open: { type: "boolean" },
     },
     required: ["filter", "select"],
+    additionalProperties: false,
+  },
+  movidesk_search_tickets_parallel: {
+    type: "object",
+    properties: {
+      branches: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            label: { type: "string" },
+            filter: { type: "string" },
+            only_open: { type: "boolean" },
+          },
+          required: ["label", "filter"],
+          additionalProperties: false,
+        },
+        minItems: 2,
+        maxItems: 5,
+      },
+      select: { type: "array", items: { type: "string" } },
+      page_size: { type: "integer" },
+      max_pages: { type: "integer" },
+    },
+    required: ["branches", "select"],
     additionalProperties: false,
   },
   export_tickets_to_excel: {
@@ -168,7 +192,6 @@ const TOOL_PARAMETERS: Record<ToolName, Record<string, unknown>> = {
     properties: {
       filter: { type: "string" },
       select: { type: "array", items: { type: "string" } },
-      source: { type: "string", enum: ["current", "past"] },
       page_size: { type: "integer" },
       max_pages: { type: "integer" },
       only_open: { type: "boolean" },
@@ -208,7 +231,6 @@ const TOOL_PARAMETERS: Record<ToolName, Record<string, unknown>> = {
     properties: {
       filter: { type: "string" },
       select: { type: "array", items: { type: "string" } },
-      source: { type: "string", enum: ["current", "past"] },
       page_size: { type: "integer" },
       max_pages: { type: "integer" },
       only_open: { type: "boolean" },
